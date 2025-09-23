@@ -29,6 +29,10 @@ class HostRuntime:
     host: HostConfig
     adapter: TmuxAdapter
 
+    @property
+    def name(self) -> str:
+        return self.host.name
+
 
 class Runner:
     def __init__(
@@ -50,8 +54,18 @@ class Runner:
         self.dry_run = dry_run
         self.policy_engine = PolicyEngine(policy, state_store, approval_manager)
 
+    def _poll_interval_seconds(self) -> float:
+        base = self.agent_config.poll_interval_ms
+        host_intervals = [
+            hr.host.tmux.poll_interval_ms
+            for hr in self.adapters
+            if hr.host.tmux.poll_interval_ms is not None
+        ]
+        effective_ms = min([base, *host_intervals]) if host_intervals else base
+        return max(effective_ms, 100) / 1000.0  # clamp to avoid zero
+
     def run_forever(self) -> None:
-        interval = self.agent_config.poll_interval_ms / 1000.0
+        interval = self._poll_interval_seconds()
         logger.info("Starting tmux agent with poll interval %.2fs", interval)
         try:
             while True:
@@ -67,37 +81,43 @@ class Runner:
             for pane in panes:
                 if not self._pane_matches(runtime.host, pane):
                     continue
-                capture = runtime.adapter.capture_pane(pane.pane_id, runtime.host.capture_lines)
-                new_lines = self._diff_pane(pane, capture)
+                capture = runtime.adapter.capture_pane(
+                    pane.pane_id,
+                    runtime.host.tmux.capture_lines,
+                )
+                new_lines = self._diff_pane(runtime.name, pane, capture)
                 messages = parse_messages(new_lines) if new_lines else []
-                outcome = self.policy_engine.evaluate(pane, new_lines, messages)
-                self._handle_outcome(runtime.adapter, pane, outcome)
+                outcome = self.policy_engine.evaluate(runtime.name, pane, new_lines, messages)
+                self._handle_outcome(runtime, pane, outcome)
 
     def _pane_matches(self, host: HostConfig, pane: PaneInfo) -> bool:
-        # Filter by session names if provided
-        if host.session_filters and not any(re.search(pattern, pane.session_name) for pattern in host.session_filters):
+        session_filters = host.tmux.session_filters
+        if session_filters and not any(
+            re.search(pattern, pane.session_name) for pattern in session_filters
+        ):
             return False
-        if host.pane_name_patterns and not pane.matches_patterns(host.pane_name_patterns):
+        if host.tmux.pane_name_patterns and not pane.matches_patterns(host.tmux.pane_name_patterns):
             return False
         return True
 
-    def _diff_pane(self, pane: PaneInfo, capture: CaptureResult) -> list[str]:
+    def _diff_pane(self, host: str, pane: PaneInfo, capture: CaptureResult) -> list[str]:
         buffer_text = capture.content
-        prev_offset = self.state_store.get_offset(pane.pane_id)
+        prev_offset = self.state_store.get_offset(host, pane.pane_id)
         if prev_offset > len(buffer_text):
             prev_offset = 0  # pane cleared or history truncated
         new_slice = buffer_text[prev_offset:]
-        self.state_store.set_offset(pane.pane_id, len(buffer_text))
+        self.state_store.set_offset(host, pane.pane_id, len(buffer_text))
         if not new_slice:
             return []
         return new_slice.splitlines()
 
-    def _handle_outcome(self, adapter: TmuxAdapter, pane: PaneInfo, outcome: EvaluationOutcome) -> None:
+    def _handle_outcome(self, runtime: HostRuntime, pane: PaneInfo, outcome: EvaluationOutcome) -> None:
         for request in outcome.approvals:
             logger.info(
-                "Approval required for %s/%s -> %s",
-                pane.pane_id,
+                "Approval required for %s/%s on %s -> %s",
+                request.pane_id,
                 request.stage,
+                request.host,
                 request.file_path,
             )
         for note in outcome.notifications:
@@ -106,10 +126,17 @@ class Runner:
             except Exception as exc:  # pragma: no cover - notification failures are non-critical
                 logger.error("Failed to send notification: %s", exc)
         for action in outcome.actions:
-            logger.info("Action %s on pane %s", action.command, pane.pane_id)
+            if action.host != runtime.name:
+                logger.debug(
+                    "Skipping action for host %s while processing %s", action.host, runtime.name
+                )
+                continue
+            logger.info("Action %s on %s/%s", action.command, runtime.name, action.pane_id)
             if self.dry_run:
                 continue
             try:
-                adapter.send_keys(action.pane_id, action.command, enter=action.enter)
+                runtime.adapter.send_keys(action.pane_id, action.command, enter=action.enter)
             except Exception as exc:  # pragma: no cover
-                logger.error("Failed to send keys to pane %s: %s", pane.pane_id, exc)
+                logger.error(
+                    "Failed to send keys to pane %s on %s: %s", action.pane_id, runtime.name, exc
+                )

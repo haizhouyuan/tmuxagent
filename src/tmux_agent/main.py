@@ -48,8 +48,7 @@ def main() -> None:
         base_url=args.public_base_url,
     )
 
-    hosts = agent_config.hosts or [HostConfig(name="local")]
-    adapters = [HostRuntime(host=host, adapter=_build_adapter(agent_config, host)) for host in hosts]
+    adapters = [HostRuntime(host=host, adapter=_build_adapter(agent_config, host)) for host in agent_config.hosts]
     runner = Runner(
         agent_config=agent_config,
         policy=policy_config,
@@ -70,7 +69,11 @@ def main() -> None:
 
 
 def _build_adapter(agent_config: AgentConfig, host: HostConfig) -> TmuxAdapter:
-    return TmuxAdapter(tmux_bin=agent_config.tmux_bin, socket=host.socket)
+    return TmuxAdapter(
+        tmux_bin=agent_config.tmux_bin,
+        socket=host.tmux.socket,
+        ssh=host.ssh,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI bootstrap

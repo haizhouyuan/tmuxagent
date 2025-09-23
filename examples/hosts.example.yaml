@@ -4,9 +4,26 @@ sqlite_path: ~/.tmux_agent/state.db
 approval_dir: ~/.tmux_agent/approvals
 notify: stdout
 hosts:
+  - name: nas
+    ssh:
+      host: 192.168.1.50
+      port: 22
+      user: nasuser
+      key: /home/nasuser/.ssh/id_rsa
+    tmux:
+      socket: default
+      session_filters:
+        - "^proj:storyapp$"
+        - "^proj:points$"
+      pane_name_patterns:
+        - "^codex"
+        - "^claude"
+      capture_lines: 2000
+      poll_interval_ms: 1500
   - name: local
-    socket: default
-    session_filters: []
-    pane_name_patterns:
-      - "^codex"
-    capture_lines: 2000
+    tmux:
+      socket: default
+      session_filters: []
+      pane_name_patterns:
+        - "^codex"
+      capture_lines: 2000

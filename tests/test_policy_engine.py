@@ -6,6 +6,8 @@ from tmux_agent.policy import PolicyEngine
 from tmux_agent.state import StageStatus
 from tmux_agent.tmux import PaneInfo
 
+HOST = "local"
+
 
 def load_policy(yaml_str: str) -> PolicyConfig:
     data = yaml.safe_load(yaml_str)
@@ -47,36 +49,36 @@ pipelines:
 
 def test_policy_flow(state_store, tmp_path):
     policy = make_policy()
-    approvals = ApprovalManager(state_store, tmp_path, secret="secret", base_url="https://example")
+    approvals = ApprovalManager(state_store, tmp_path / "approvals", secret="secret", base_url="https://example")
     engine = PolicyEngine(policy, state_store, approvals)
-    pane = PaneInfo(pane_id="%1", session_name="proj:storyapp", window_name="agent:codex-ci", pane_title="codex:ci")
+    pane = PaneInfo(
+        pane_id="%1",
+        session_name="proj:storyapp",
+        window_name="agent:codex-ci",
+        pane_title="codex:ci",
+    )
 
-    # Trigger lint stage
-    outcome = engine.evaluate(pane, ["run lint"], [])
+    outcome = engine.evaluate(HOST, pane, ["run lint"], [])
     assert outcome.actions[0].command == "npm run lint"
-    lint_state = state_store.load_stage_state("%1", "demo", "lint")
+    lint_state = state_store.load_stage_state(HOST, "%1", "demo", "lint")
     assert lint_state.status == StageStatus.RUNNING
 
-    # Mark lint success
-    outcome = engine.evaluate(pane, ["lint ok"], [])
-    lint_state = state_store.load_stage_state("%1", "demo", "lint")
+    outcome = engine.evaluate(HOST, pane, ["lint ok"], [])
+    lint_state = state_store.load_stage_state(HOST, "%1", "demo", "lint")
     assert lint_state.status == StageStatus.COMPLETED
 
-    # Build should now wait for approval
-    outcome = engine.evaluate(pane, [], [])
-    build_state = state_store.load_stage_state("%1", "demo", "build")
+    outcome = engine.evaluate(HOST, pane, [], [])
+    build_state = state_store.load_stage_state(HOST, "%1", "demo", "build")
     assert build_state.status == StageStatus.WAITING_APPROVAL
     assert outcome.approvals
     request = outcome.approvals[0]
     request.file_path.write_text("approve")
 
-    # Approval moves to RUNNING and sends action
-    outcome = engine.evaluate(pane, [], [])
-    build_state = state_store.load_stage_state("%1", "demo", "build")
+    outcome = engine.evaluate(HOST, pane, [], [])
+    build_state = state_store.load_stage_state(HOST, "%1", "demo", "build")
     assert build_state.status == StageStatus.RUNNING
     assert outcome.actions[0].command == "npm run build"
 
-    # Success completes
-    outcome = engine.evaluate(pane, ["build ok"], [])
-    build_state = state_store.load_stage_state("%1", "demo", "build")
+    outcome = engine.evaluate(HOST, pane, ["build ok"], [])
+    build_state = state_store.load_stage_state(HOST, "%1", "demo", "build")
     assert build_state.status == StageStatus.COMPLETED

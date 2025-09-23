@@ -23,6 +23,7 @@ class StageStatus(str, Enum):
 
 @dataclass
 class StageState:
+    host: str
     pane_id: str
     pipeline: str
     stage: str
@@ -32,21 +33,24 @@ class StageState:
     updated_at: int | None = None
 
     def to_row(self) -> tuple[Any, ...]:
+        updated = self.updated_at or int(time.time())
         return (
+            self.host,
             self.pane_id,
             self.pipeline,
             self.stage,
             self.status.value,
             self.retries,
             json.dumps(self.data or {}),
-            self.updated_at or int(time.time()),
+            updated,
         )
 
     @classmethod
     def from_row(cls, row: tuple[Any, ...]) -> "StageState":
-        pane_id, pipeline, stage, status, retries, data_json, updated_at = row
+        host, pane_id, pipeline, stage, status, retries, data_json, updated_at = row
         data = json.loads(data_json) if data_json else {}
         return cls(
+            host=host,
             pane_id=pane_id,
             pipeline=pipeline,
             stage=stage,
@@ -61,7 +65,7 @@ class StateStore:
     """Encapsulates SQLite operations for offsets, stage state, and approvals."""
 
     def __init__(self, db_path: Path):
-        self.db_path = db_path
+        self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
@@ -75,12 +79,15 @@ class StateStore:
         cur.executescript(
             """
             CREATE TABLE IF NOT EXISTS pane_offsets (
-                pane_id TEXT PRIMARY KEY,
+                host TEXT NOT NULL,
+                pane_id TEXT NOT NULL,
                 offset INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (host, pane_id)
             );
 
             CREATE TABLE IF NOT EXISTS stage_state (
+                host TEXT NOT NULL,
                 pane_id TEXT NOT NULL,
                 pipeline TEXT NOT NULL,
                 stage TEXT NOT NULL,
@@ -88,56 +95,57 @@ class StateStore:
                 retries INTEGER NOT NULL DEFAULT 0,
                 data TEXT,
                 updated_at INTEGER NOT NULL,
-                PRIMARY KEY (pane_id, pipeline, stage)
+                PRIMARY KEY (host, pane_id, pipeline, stage)
             );
 
             CREATE TABLE IF NOT EXISTS approval_tokens (
+                host TEXT NOT NULL,
                 pane_id TEXT NOT NULL,
                 stage TEXT NOT NULL,
                 token TEXT NOT NULL,
                 expires_at INTEGER NOT NULL,
-                PRIMARY KEY (pane_id, stage)
+                PRIMARY KEY (host, pane_id, stage)
             );
             """
         )
         self._conn.commit()
 
     # Pane offsets -----------------------------------------------------
-    def get_offset(self, pane_id: str) -> int:
+    def get_offset(self, host: str, pane_id: str) -> int:
         cur = self._conn.execute(
-            "SELECT offset FROM pane_offsets WHERE pane_id = ?",
-            (pane_id,),
+            "SELECT offset FROM pane_offsets WHERE host = ? AND pane_id = ?",
+            (host, pane_id),
         )
         row = cur.fetchone()
         return int(row[0]) if row else 0
 
-    def set_offset(self, pane_id: str, offset: int) -> None:
+    def set_offset(self, host: str, pane_id: str, offset: int) -> None:
         now = int(time.time())
         self._conn.execute(
-            "INSERT INTO pane_offsets (pane_id, offset, updated_at) VALUES (?, ?, ?)\n"
-            "ON CONFLICT(pane_id) DO UPDATE SET offset = excluded.offset, updated_at = excluded.updated_at",
-            (pane_id, offset, now),
+            "INSERT INTO pane_offsets (host, pane_id, offset, updated_at) VALUES (?, ?, ?, ?)\n"
+            "ON CONFLICT(host, pane_id) DO UPDATE SET offset = excluded.offset, updated_at = excluded.updated_at",
+            (host, pane_id, offset, now),
         )
         self._conn.commit()
 
     # Stage state ------------------------------------------------------
-    def load_stage_state(self, pane_id: str, pipeline: str, stage: str) -> StageState:
+    def load_stage_state(self, host: str, pane_id: str, pipeline: str, stage: str) -> StageState:
         cur = self._conn.execute(
-            "SELECT pane_id, pipeline, stage, status, retries, data, updated_at\n"
-            "FROM stage_state WHERE pane_id = ? AND pipeline = ? AND stage = ?",
-            (pane_id, pipeline, stage),
+            "SELECT host, pane_id, pipeline, stage, status, retries, data, updated_at\n"
+            "FROM stage_state WHERE host = ? AND pane_id = ? AND pipeline = ? AND stage = ?",
+            (host, pane_id, pipeline, stage),
         )
         row = cur.fetchone()
         if row:
             return StageState.from_row(tuple(row))
-        return StageState(pane_id=pane_id, pipeline=pipeline, stage=stage)
+        return StageState(host=host, pane_id=pane_id, pipeline=pipeline, stage=stage)
 
     def save_stage_state(self, state: StageState) -> None:
         row = state.to_row()
         self._conn.execute(
-            "INSERT INTO stage_state (pane_id, pipeline, stage, status, retries, data, updated_at)\n"
-            "VALUES (?, ?, ?, ?, ?, ?, ?)\n"
-            "ON CONFLICT(pane_id, pipeline, stage) DO UPDATE SET\n"
+            "INSERT INTO stage_state (host, pane_id, pipeline, stage, status, retries, data, updated_at)\n"
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n"
+            "ON CONFLICT(host, pane_id, pipeline, stage) DO UPDATE SET\n"
             " status = excluded.status,\n"
             " retries = excluded.retries,\n"
             " data = excluded.data,\n"
@@ -146,26 +154,28 @@ class StateStore:
         )
         self._conn.commit()
 
-    def reset_pipeline(self, pane_id: str, pipeline: str) -> None:
+    def reset_pipeline(self, host: str, pane_id: str, pipeline: str) -> None:
         self._conn.execute(
-            "DELETE FROM stage_state WHERE pane_id = ? AND pipeline = ?",
-            (pane_id, pipeline),
+            "DELETE FROM stage_state WHERE host = ? AND pane_id = ? AND pipeline = ?",
+            (host, pane_id, pipeline),
         )
         self._conn.commit()
 
     # Approval tokens --------------------------------------------------
-    def upsert_approval_token(self, pane_id: str, stage: str, token: str, expires_at: int) -> None:
+    def upsert_approval_token(
+        self, host: str, pane_id: str, stage: str, token: str, expires_at: int
+    ) -> None:
         self._conn.execute(
-            "INSERT INTO approval_tokens (pane_id, stage, token, expires_at) VALUES (?, ?, ?, ?)\n"
-            "ON CONFLICT(pane_id, stage) DO UPDATE SET token = excluded.token, expires_at = excluded.expires_at",
-            (pane_id, stage, token, expires_at),
+            "INSERT INTO approval_tokens (host, pane_id, stage, token, expires_at) VALUES (?, ?, ?, ?, ?)\n"
+            "ON CONFLICT(host, pane_id, stage) DO UPDATE SET token = excluded.token, expires_at = excluded.expires_at",
+            (host, pane_id, stage, token, expires_at),
         )
         self._conn.commit()
 
-    def get_approval_token(self, pane_id: str, stage: str) -> Optional[tuple[str, int]]:
+    def get_approval_token(self, host: str, pane_id: str, stage: str) -> Optional[tuple[str, int]]:
         cur = self._conn.execute(
-            "SELECT token, expires_at FROM approval_tokens WHERE pane_id = ? AND stage = ?",
-            (pane_id, stage),
+            "SELECT token, expires_at FROM approval_tokens WHERE host = ? AND pane_id = ? AND stage = ?",
+            (host, pane_id, stage),
         )
         row = cur.fetchone()
         if not row:
@@ -173,14 +183,14 @@ class StateStore:
         token = row["token"]
         expires_at = int(row["expires_at"])
         if expires_at < int(time.time()):
-            self.delete_approval_token(pane_id, stage)
+            self.delete_approval_token(host, pane_id, stage)
             return None
         return token, expires_at
 
-    def delete_approval_token(self, pane_id: str, stage: str) -> None:
+    def delete_approval_token(self, host: str, pane_id: str, stage: str) -> None:
         self._conn.execute(
-            "DELETE FROM approval_tokens WHERE pane_id = ? AND stage = ?",
-            (pane_id, stage),
+            "DELETE FROM approval_tokens WHERE host = ? AND pane_id = ? AND stage = ?",
+            (host, pane_id, stage),
         )
         self._conn.commit()
 

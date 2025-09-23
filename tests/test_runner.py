@@ -9,6 +9,9 @@ from tmux_agent.runner import Runner
 from tmux_agent.tmux import FakeTmuxAdapter
 
 
+HOST_NAME = "local"
+
+
 def make_agent_config(tmp_path):
     data = {
         "poll_interval_ms": 10,
@@ -18,11 +21,13 @@ def make_agent_config(tmp_path):
         "notify": "stdout",
         "hosts": [
             {
-                "name": "local",
-                "socket": "default",
-                "session_filters": ["proj:storyapp"],
-                "pane_name_patterns": ["^codex"],
-                "capture_lines": 2000,
+                "name": HOST_NAME,
+                "tmux": {
+                    "socket": "default",
+                    "session_filters": ["proj:storyapp"],
+                    "pane_name_patterns": ["^codex"],
+                    "capture_lines": 2000,
+                },
             }
         ],
     }
@@ -66,7 +71,11 @@ pipelines:
 def test_runner_flow(state_store, tmp_path, monkeypatch):
     agent_config = make_agent_config(tmp_path)
     policy = make_policy()
-    approval_manager = ApprovalManager(state_store, tmp_path / "approvals", secret="secret")
+    approval_manager = ApprovalManager(
+        state_store,
+        tmp_path / "approvals",
+        secret="secret",
+    )
     notifier = MockNotifier()
 
     adapter = FakeTmuxAdapter({"%1": "run lint\n"})
@@ -88,16 +97,15 @@ def test_runner_flow(state_store, tmp_path, monkeypatch):
 
     adapter.append_output("%1", "lint ok\n")
     runner.run_once()
-    # Build should now pause for approval
-    build_state = state_store.load_stage_state("%1", "demo", "build")
+    build_state = state_store.load_stage_state(HOST_NAME, "%1", "demo", "build")
     assert build_state.status.value == "WAITING_APPROVAL"
 
-    approval_path = approval_manager.approval_file("%1", "build")
+    approval_path = approval_manager.approval_file(HOST_NAME, "%1", "build")
     approval_path.write_text("approve")
     runner.run_once()
     assert "[SENT:npm run build" in adapter._panes["%1"]
 
     adapter.append_output("%1", "build ok\n")
     runner.run_once()
-    build_state = state_store.load_stage_state("%1", "demo", "build")
+    build_state = state_store.load_stage_state(HOST_NAME, "%1", "demo", "build")
     assert build_state.status.value == "COMPLETED"

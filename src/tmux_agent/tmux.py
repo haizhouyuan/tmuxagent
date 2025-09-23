@@ -5,6 +5,9 @@ import re
 import subprocess
 from dataclasses import dataclass
 from typing import Iterable
+from typing import Optional
+
+from .config import SSHConfig
 
 
 @dataclass
@@ -17,7 +20,13 @@ class PaneInfo:
     def matches_patterns(self, patterns: Iterable[str]) -> bool:
         if not patterns:
             return True
-        return any(self.pane_title and __import__("re").search(pat, self.pane_title) for pat in patterns)
+        for pattern in patterns:
+            compiled = re.compile(pattern)
+            if (self.pane_title and compiled.search(self.pane_title)) or (
+                self.window_name and compiled.search(self.window_name)
+            ):
+                return True
+        return False
 
 
 @dataclass
@@ -27,30 +36,57 @@ class CaptureResult:
 
 
 class TmuxAdapter:
-    """Simple thin wrapper around tmux shell commands."""
+    """Wrapper around tmux commands, supporting local and SSH execution."""
 
-    def __init__(self, tmux_bin: str = "tmux", socket: str | None = None):
+    def __init__(
+        self,
+        tmux_bin: str = "tmux",
+        socket: str | None = None,
+        ssh: Optional[SSHConfig] = None,
+    ) -> None:
         self.tmux_bin = tmux_bin
         self.socket = socket
+        self.ssh = ssh
 
-    def _base_cmd(self) -> list[str]:
+    def _tmux_command(self, args: list[str]) -> list[str]:
         cmd = [self.tmux_bin]
         if self.socket and self.socket != "default":
             cmd += ["-L", self.socket]
+        cmd.extend(args)
         return cmd
 
     def _run(self, args: list[str]) -> subprocess.CompletedProcess:
-        cmd = self._base_cmd() + args
+        tmux_cmd = self._tmux_command(args)
+
+        if self.ssh:
+            ssh_cmd = [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                f"ConnectTimeout={self.ssh.timeout}",
+                "-p",
+                str(self.ssh.port),
+            ]
+            if self.ssh.key_path:
+                ssh_cmd += ["-i", self.ssh.key_path]
+            target = f"{self.ssh.user}@{self.ssh.host}" if self.ssh.user else self.ssh.host
+            ssh_cmd.append(target)
+            cmd = ssh_cmd + tmux_cmd
+        else:
+            cmd = tmux_cmd
+
         return subprocess.run(cmd, check=True, text=True, capture_output=True)
 
     def list_panes(self) -> list[PaneInfo]:
-        args = [
-            "list-panes",
-            "-a",
-            "-F",
-            "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_title}",
-        ]
-        proc = self._run(args)
+        proc = self._run(
+            [
+                "list-panes",
+                "-a",
+                "-F",
+                "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_title}",
+            ]
+        )
         panes: list[PaneInfo] = []
         for line in proc.stdout.strip().splitlines():
             if not line:
@@ -67,21 +103,22 @@ class TmuxAdapter:
         return panes
 
     def capture_pane(self, pane_id: str, capture_lines: int = 2000) -> CaptureResult:
-        args = [
-            "capture-pane",
-            "-p",
-            "-t",
-            pane_id,
-            "-S",
-            f"-{capture_lines}",
-        ]
-        proc = self._run(args)
+        proc = self._run(
+            [
+                "capture-pane",
+                "-p",
+                "-t",
+                pane_id,
+                "-S",
+                f"-{capture_lines}",
+            ]
+        )
         return CaptureResult(pane_id=pane_id, content=proc.stdout)
 
     def send_keys(self, pane_id: str, keys: str, enter: bool = True) -> None:
         args = ["send-keys", "-t", pane_id]
-        for chunk in keys.split(" "):
-            args.append(chunk)
+        if keys:
+            args.append(keys)
         if enter:
             args.append("C-m")
         self._run(args)
@@ -120,6 +157,5 @@ class FakeTmuxAdapter(TmuxAdapter):
         return CaptureResult(pane_id=pane_id, content=self._panes.get(pane_id, ""))
 
     def send_keys(self, pane_id: str, keys: str, enter: bool = True) -> None:
-        # For testing, record command in buffer to assert behavior.
         suffix = keys + ("\n" if enter else "")
         self.append_output(pane_id, f"[SENT:{suffix}]")

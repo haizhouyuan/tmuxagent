@@ -7,7 +7,7 @@ A lightweight orchestration agent for tmux-based AI development environments. Th
 - YAML policy engine with stage triggers, retries, approvals, and escalation hooks.
 - Persistent state backed by SQLite for restart resilience.
 - File-based and webhook-driven approval flow with signed tokens.
-- Notification adapters (stdout by default, WeCom webhook optional).
+- Notification adapters (stdout 默认，可选 Server酱 或 WeCom webhook).
 
 ## Quick Start
 ```bash
