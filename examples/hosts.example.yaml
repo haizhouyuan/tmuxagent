@@ -1,0 +1,12 @@
+poll_interval_ms: 1500
+tmux_bin: tmux
+sqlite_path: ~/.tmux_agent/state.db
+approval_dir: ~/.tmux_agent/approvals
+notify: stdout
+hosts:
+  - name: local
+    socket: default
+    session_filters: []
+    pane_name_patterns:
+      - "^codex"
+    capture_lines: 2000
