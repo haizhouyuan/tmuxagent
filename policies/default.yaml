@@ -1,0 +1,169 @@
+# Default policy configuration
+# Defines pipelines for different project workflows
+
+principles:
+  - "Automate where possible; require human approval for critical actions"
+  - "Fail fast and retry with exponential backoff"
+  - "Log all decisions and maintain audit trail"
+
+pipelines:
+  # Standard CI/CD pipeline for web applications
+  - name: "webapp-ci"
+    match:
+      any_of:
+        - window_name: "^agent:codex-ci$"
+        - pane_title: "^codex:ci$"
+    stages:
+      - name: "lint"
+        triggers:
+          any_of:
+            - log_regex: "(?i)npm run lint"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"lint\""
+        actions_on_start:
+          - send_keys: "npm run lint"
+        success_when:
+          any_of:
+            - log_regex: "(?i)0 problems?"
+            - log_regex: "### SENTRY.*\"type\"\\s*:\\s*\"STATUS\".*\"ok\"\\s*:\\s*true"
+        fail_when:
+          any_of:
+            - log_regex: "(?i)✖ .* problems?"
+            - log_regex: "(?i)error.*eslint"
+        on_fail:
+          - retry: { max: 1, backoff_ms: 2000 }
+          - if_still_fail: { ask_human: "Lint failed. Continue anyway?" }
+
+      - name: "test"
+        triggers:
+          - after_stage_success: "lint"
+        actions_on_start:
+          - send_keys: "npm test"
+        success_when:
+          any_of:
+            - log_regex: "(?i)\\b(\\d+)\\s+passing\\b"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"test\".*\"ok\"\\s*:\\s*true"
+        fail_when:
+          - log_regex: "(?i)\\b(\\d+)\\s+failing\\b"
+        on_fail:
+          - retry: { max: 1, backoff_ms: 3000 }
+          - if_still_fail: { ask_human: "Tests failed. Continue to build?" }
+
+      - name: "build"
+        triggers:
+          - after_stage_success: "test"
+        require_approval: true
+        actions_on_start:
+          - send_keys: "npm run build"
+        success_when:
+          any_of:
+            - log_regex: "(?i)Built successfully|Compiled successfully"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"build\".*\"ok\"\\s*:\\s*true"
+        fail_when:
+          - log_regex: "(?i)build failed|compilation failed"
+        on_fail:
+          - escalate: "build_failed"
+
+      - name: "deploy"
+        triggers:
+          - after_stage_success: "build"
+        require_approval: true
+        actions_on_start:
+          - send_keys: "npm run deploy"
+          - external_check:
+              type: "github_action"
+              repository: "${GITHUB_REPO}"
+              max_wait: 600
+        success_when:
+          any_of:
+            - log_regex: "(?i)deployed successfully"
+            - external_status: "success"
+        fail_when:
+          any_of:
+            - log_regex: "(?i)deployment failed"
+            - external_status: "failure"
+        on_fail:
+          - escalate: "deployment_failed"
+
+  # Voice feature development pipeline
+  - name: "voice-development"
+    match:
+      any_of:
+        - window_name: "^agent:codex-voice$"
+        - pane_title: "^codex:voice$"
+    stages:
+      - name: "voice-test"
+        triggers:
+          any_of:
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"voice-test\""
+            - log_regex: "(?i)run voice test"
+        actions_on_start:
+          - send_keys: "npm run test:voice"
+        success_when:
+          any_of:
+            - log_regex: "(?i)voice tests passing"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"voice-test\".*\"ok\"\\s*:\\s*true"
+        fail_when:
+          - log_regex: "(?i)voice tests failing"
+        on_fail:
+          - retry: { max: 2, backoff_ms: 5000 }
+          - if_still_fail: { ask_human: "Voice tests failed. Debug or skip?" }
+
+  # Release preparation pipeline
+  - name: "release-prep"
+    match:
+      any_of:
+        - window_name: "^agent:codex-release$"
+        - pane_title: "^codex:release$"
+    stages:
+      - name: "version-check"
+        triggers:
+          any_of:
+            - log_regex: "(?i)version check"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"version-check\""
+        actions_on_start:
+          - send_keys: "npm version"
+        success_when:
+          any_of:
+            - log_regex: "(?i)version updated"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"version-check\".*\"ok\"\\s*:\\s*true"
+
+      - name: "changelog"
+        triggers:
+          - after_stage_success: "version-check"
+        actions_on_start:
+          - send_keys: "npm run changelog"
+        success_when:
+          any_of:
+            - log_regex: "(?i)changelog updated"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"changelog\".*\"ok\"\\s*:\\s*true"
+
+      - name: "final-build"
+        triggers:
+          - after_stage_success: "changelog"
+        require_approval: true
+        actions_on_start:
+          - send_keys: "npm run build:production"
+        success_when:
+          any_of:
+            - log_regex: "(?i)production build complete"
+            - log_regex: "### SENTRY.*\"stage\"\\s*:\\s*\"final-build\".*\"ok\"\\s*:\\s*true"
+        on_fail:
+          - escalate: "production_build_failed"
+
+      - name: "release"
+        triggers:
+          - after_stage_success: "final-build"
+        require_approval: true
+        actions_on_start:
+          - send_keys: "npm publish"
+          - external_check:
+              type: "github_action"
+              repository: "${GITHUB_REPO}"
+              workflow: "release"
+              max_wait: 900
+        success_when:
+          any_of:
+            - log_regex: "(?i)published successfully"
+            - external_status: "success"
+        on_fail:
+          - escalate: "release_failed"
