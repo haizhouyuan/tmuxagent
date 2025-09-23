@@ -1,0 +1,39 @@
+# Example hosts configuration
+# Copy this to hosts.yaml and modify for your environment
+
+hosts:
+  - name: local
+    ssh:
+      host: localhost
+      port: 22
+      user: ${USER:root}
+      key: ~/.ssh/id_rsa
+      timeout: 30
+    tmux:
+      socket: default
+      session_filters:
+        - "^proj:storyapp$"
+        - "^proj:points$"
+      pane_name_patterns:
+        - "^codex"
+        - "^claude"
+      capture_lines: 2000
+      poll_interval_ms: 1500
+
+  - name: nas
+    ssh:
+      host: ${NAS_HOST:192.168.1.100}
+      port: ${NAS_SSH_PORT:22}
+      user: ${NAS_USER:admin}
+      key: ${NAS_SSH_KEY:~/.ssh/nas_key}
+      timeout: 30
+    tmux:
+      socket: default
+      session_filters:
+        - "^proj:"
+      pane_name_patterns:
+        - "^codex"
+        - "^claude"
+        - "^ai-"
+      capture_lines: 2000
+      poll_interval_ms: 1500
