@@ -24,6 +24,20 @@ python -m tmux_agent.main --config hosts.yaml --policy policy.yaml
 
 Run `python -m tmux_agent.main --help` for CLI options.
 
+### Optional: Dashboard
+
+```bash
+pip install .[dashboard]
+python -m tmux_agent.dashboard.cli \
+  --db ~/.tmux_agent/state.db \
+  --host 0.0.0.0 \
+  --port 8700 \
+  --username dashboard \
+  --password "<strong-password>"
+```
+
+Visit `http://<host>:8700/` for the HTML overview or `.../api/overview` for JSON.
+
 ## Testing
 ```bash
 pip install -e .[dev]

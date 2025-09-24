@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+import secrets
+from typing import Any, Callable
 
 from fastapi import Depends
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi import Request
+from fastapi import status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from .config import DashboardConfig
 from .data import DashboardDataProvider
@@ -23,8 +27,13 @@ def create_app(config: DashboardConfig) -> FastAPI:
     def get_provider() -> DashboardDataProvider:
         return DashboardDataProvider(config.db_path)
 
+    auth_dependency = _build_auth_dependency(config)
+
     @app.get("/api/overview")
-    def overview(provider: DashboardDataProvider = Depends(get_provider)) -> dict[str, Any]:
+    def overview(
+        provider: DashboardDataProvider = Depends(get_provider),
+        _: None = Depends(auth_dependency),
+    ) -> dict[str, Any]:
         rows = provider.stage_rows()
         summary = provider.status_summary()
         return {
@@ -48,6 +57,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
     def index(
         request: Request,
         provider: DashboardDataProvider = Depends(get_provider),
+        _: None = Depends(auth_dependency),
     ) -> HTMLResponse:
         rows = provider.stage_rows()
         summary = provider.status_summary()
@@ -65,3 +75,24 @@ def create_app(config: DashboardConfig) -> FastAPI:
         return {"status": "ok"}
 
     return app
+
+
+def _build_auth_dependency(config: DashboardConfig) -> Callable[..., None]:
+    if not config.auth_enabled:
+        def passthrough() -> None:  # pragma: no cover - trivial branch
+            return None
+        return passthrough
+
+    security = HTTPBasic()
+
+    def guard(credentials: HTTPBasicCredentials = Depends(security)) -> None:
+        username_ok = secrets.compare_digest(credentials.username or "", config.username or "")
+        password_ok = secrets.compare_digest(credentials.password or "", config.password or "")
+        if not (username_ok and password_ok):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+
+    return guard

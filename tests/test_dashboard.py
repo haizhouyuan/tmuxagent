@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
+import base64
 
 from tmux_agent.dashboard.app import create_app
 from tmux_agent.dashboard.config import DashboardConfig
@@ -60,3 +61,24 @@ def test_index_page_renders_state(tmp_path):
     assert response.status_code == 200
     assert "demo" in response.text
     assert "WAITING_APPROVAL" in response.text
+
+
+def test_endpoints_require_basic_auth_when_configured(tmp_path):
+    db_path = tmp_path / "state.db"
+    _seed_state(db_path)
+    config = DashboardConfig(db_path=db_path, username="admin", password="secret")
+    app = create_app(config)
+    client = TestClient(app)
+
+    # Missing credentials -> 401
+    response = client.get("/api/overview")
+    assert response.status_code == 401
+
+    credentials = base64.b64encode(b"admin:secret").decode("ascii")
+    headers = {"Authorization": f"Basic {credentials}"}
+    ok_response = client.get("/api/overview", headers=headers)
+    assert ok_response.status_code == 200
+
+    html_response = client.get("/", headers=headers)
+    assert html_response.status_code == 200
+    assert "WAITING_APPROVAL" in html_response.text

@@ -21,9 +21,16 @@ def main() -> None:
         default=None,
         help="Optional override for dashboard templates",
     )
+    parser.add_argument("--username", type=str, default=None, help="Basic auth username (optional)")
+    parser.add_argument("--password", type=str, default=None, help="Basic auth password (optional)")
     args = parser.parse_args()
 
-    config = DashboardConfig(db_path=args.db, template_path=args.templates)
+    config = DashboardConfig(
+        db_path=args.db,
+        template_path=args.templates,
+        username=args.username,
+        password=args.password,
+    )
     app = create_app(config)
     uvicorn.run(app, host=args.host, port=args.port)
 
