@@ -21,9 +21,19 @@ def main() -> None:
         default=None,
         help="Optional override for dashboard templates",
     )
+    parser.add_argument(
+        "--approval-dir",
+        type=Path,
+        default=None,
+        help="Directory where approval request files are stored",
+    )
     args = parser.parse_args()
 
-    config = DashboardConfig(db_path=args.db, template_path=args.templates)
+    config = DashboardConfig(
+        db_path=args.db,
+        template_path=args.templates,
+        approval_dir=args.approval_dir,
+    )
     app = create_app(config)
     uvicorn.run(app, host=args.host, port=args.port)
 
