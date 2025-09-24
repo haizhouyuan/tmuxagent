@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tmux-agent dashboard</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 2rem;
+        background: #f9fafb;
+        color: #111827;
+      }
+      h1 {
+        font-size: 1.8rem;
+        margin-bottom: 0.5rem;
+      }
+      .summary {
+        display: flex;
+        gap: 1rem;
+        margin: 1.5rem 0;
+      }
+      .summary-card {
+        background: white;
+        border-radius: 0.5rem;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+        padding: 1rem 1.25rem;
+        min-width: 9rem;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        border-radius: 0.5rem;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+        overflow: hidden;
+      }
+      th, td {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #e5e7eb;
+        text-align: left;
+      }
+      th {
+        background: #f3f4f6;
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        color: #4b5563;
+      }
+      tbody tr:hover {
+        background: #f9fafb;
+      }
+      .status {
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+      }
+      .status-RUNNING { color: #16a34a; }
+      .status-WAITING_APPROVAL { color: #eab308; }
+      .status-WAITING_TRIGGER { color: #6b7280; }
+      .status-COMPLETED { color: #2563eb; }
+      .status-FAILED { color: #dc2626; }
+      .details {
+        font-size: 0.75rem;
+        color: #4b5563;
+        max-width: 18rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      footer {
+        margin-top: 2rem;
+        font-size: 0.75rem;
+        color: #6b7280;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>tmux-agent dashboard</h1>
+    <p>当前跟踪的 stage 状态快照。</p>
+
+    <section class="summary">
+      {% if summary %}
+        {% for status, count in summary.items() %}
+        <div class="summary-card">
+          <div class="status status-{{ status }}">{{ status.replace("_", " ") }}</div>
+          <div style="font-size:1.5rem; font-weight:700;">{{ count }}</div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div>暂无数据。</div>
+      {% endif %}
+    </section>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Pane</th>
+          <th>Pipeline</th>
+          <th>Stage</th>
+          <th>Status</th>
+          <th>Retries</th>
+          <th>Updated</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.host }}</td>
+          <td>{{ row.pane_id }}</td>
+          <td>{{ row.pipeline }}</td>
+          <td>{{ row.stage }}</td>
+          <td class="status status-{{ row.status }}">{{ row.status }}</td>
+          <td>{{ row.retries }}</td>
+          <td>{{ row.updated_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z') }}</td>
+          <td class="details">{{ row.details }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" style="text-align:center; padding:2rem; color:#6b7280;">尚未记录任何 stage。</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <footer>Powered by tmux-agent.</footer>
+  </body>
+</html>

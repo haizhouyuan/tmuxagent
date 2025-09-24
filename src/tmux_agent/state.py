@@ -161,6 +161,15 @@ class StateStore:
         )
         self._conn.commit()
 
+    def list_stage_states(self) -> list[StageState]:
+        """Return all tracked stage states ordered by latest update."""
+        cur = self._conn.execute(
+            "SELECT host, pane_id, pipeline, stage, status, retries, data, updated_at"
+            " FROM stage_state ORDER BY updated_at DESC"
+        )
+        rows = cur.fetchall()
+        return [StageState.from_row(tuple(row)) for row in rows]
+
     # Approval tokens --------------------------------------------------
     def upsert_approval_token(
         self, host: str, pane_id: str, stage: str, token: str, expires_at: int
