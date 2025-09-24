@@ -82,3 +82,38 @@ def test_endpoints_require_basic_auth_when_configured(tmp_path):
     html_response = client.get("/", headers=headers)
     assert html_response.status_code == 200
     assert "WAITING_APPROVAL" in html_response.text
+
+
+def test_api_allows_submitting_decision(tmp_path):
+    db_path = tmp_path / "state.db"
+    approvals_dir = tmp_path / "approvals"
+    _seed_state(db_path)
+    config = DashboardConfig(
+        db_path=db_path,
+        approval_dir=approvals_dir,
+        username="admin",
+        password="secret",
+    )
+    app = create_app(config)
+    client = TestClient(app)
+
+    credentials = base64.b64encode(b"admin:secret").decode("ascii")
+    headers = {"Authorization": f"Basic {credentials}"}
+
+    response = client.post(
+        "/api/approvals/local/%1/build",
+        json={"decision": "approve"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    approval_file = approvals_dir / "local" / "pct1__build.txt"
+    assert approval_file.read_text(encoding="utf-8").strip() == "approve"
+
+    response = client.post(
+        "/approvals/reject",
+        data={"host": "local", "pane_id": "%1", "stage": "build"},
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert approval_file.read_text(encoding="utf-8").strip() == "reject"

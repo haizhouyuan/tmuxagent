@@ -11,11 +11,13 @@ class DashboardConfig:
         self,
         db_path: Path,
         template_path: Path | None = None,
+        approval_dir: Path | None = None,
         username: str | None = None,
         password: str | None = None,
     ) -> None:
         self.db_path = Path(db_path).expanduser()
         self.template_path = Path(template_path) if template_path else None
+        self.approval_dir = Path(approval_dir).expanduser() if approval_dir else Path("~/.tmux_agent/approvals").expanduser()
         self.username = username
         self.password = password
 

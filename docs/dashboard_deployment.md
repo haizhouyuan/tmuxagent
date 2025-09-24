@@ -18,6 +18,7 @@ python3 -m tmux_agent.dashboard.cli \
   --db ~/.tmux_agent/state.db \
   --host 0.0.0.0 \
   --port 8700 \
+  --approval-dir ~/.tmux_agent/approvals \
   --username dashboard \
   --password "<strong-password>"
 ```
@@ -39,6 +40,7 @@ ExecStart=/usr/bin/python3 -m tmux_agent.dashboard.cli \
   --db /home/nasuser/.tmux_agent/state.db \
   --host 0.0.0.0 \
   --port 8700 \
+  --approval-dir /home/nasuser/.tmux_agent/approvals \
   --username dashboard \
   --password ${DASHBOARD_PASSWORD}
 Environment=DASHBOARD_PASSWORD=change_me

@@ -21,6 +21,12 @@ def main() -> None:
         default=None,
         help="Optional override for dashboard templates",
     )
+    parser.add_argument(
+        "--approval-dir",
+        type=Path,
+        default=Path("~/.tmux_agent/approvals"),
+        help="Path to approval directory (defaults to ~/.tmux_agent/approvals)",
+    )
     parser.add_argument("--username", type=str, default=None, help="Basic auth username (optional)")
     parser.add_argument("--password", type=str, default=None, help="Basic auth password (optional)")
     args = parser.parse_args()
@@ -28,6 +34,7 @@ def main() -> None:
     config = DashboardConfig(
         db_path=args.db,
         template_path=args.templates,
+        approval_dir=args.approval_dir,
         username=args.username,
         password=args.password,
     )

@@ -32,6 +32,7 @@ python -m tmux_agent.dashboard.cli \
   --db ~/.tmux_agent/state.db \
   --host 0.0.0.0 \
   --port 8700 \
+  --approval-dir ~/.tmux_agent/approvals \
   --username dashboard \
   --password "<strong-password>"
 ```

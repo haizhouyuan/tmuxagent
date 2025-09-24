@@ -8,14 +8,18 @@ from typing import Any, Callable
 from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi import Form
 from fastapi import Request
 from fastapi import status
 from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from .config import DashboardConfig
 from .data import DashboardDataProvider
+from ..approvals import ApprovalManager
+from ..state import StateStore
 
 
 def create_app(config: DashboardConfig) -> FastAPI:
@@ -28,6 +32,19 @@ def create_app(config: DashboardConfig) -> FastAPI:
         return DashboardDataProvider(config.db_path)
 
     auth_dependency = _build_auth_dependency(config)
+
+    def _write_decision(host: str, pane_id: str, stage: str, decision: str) -> None:
+        store = StateStore(config.db_path)
+        try:
+            manager = ApprovalManager(
+                store=store,
+                approval_dir=config.approval_dir,
+            )
+            manager.ensure_request(host, pane_id, stage)
+            path = manager.approval_file(host, pane_id, stage)
+            path.write_text(f"{decision}\n", encoding="utf-8")
+        finally:
+            store.close()
 
     @app.get("/api/overview")
     def overview(
@@ -73,6 +90,34 @@ def create_app(config: DashboardConfig) -> FastAPI:
     @app.get("/healthz")
     def healthcheck() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/api/approvals/{host}/{pane_id}/{stage}")
+    def submit_approval(
+        host: str,
+        pane_id: str,
+        stage: str,
+        payload: dict[str, Any],
+        _: None = Depends(auth_dependency),
+    ) -> dict[str, str]:
+        decision = (payload.get("decision") or "").strip().lower()
+        if decision not in {"approve", "reject"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid decision")
+        _write_decision(host, pane_id, stage, decision)
+        return {"status": "ok", "decision": decision}
+
+    @app.post("/approvals/{decision}")
+    def submit_approval_form(
+        decision: str,
+        host: str = Form(...),
+        pane_id: str = Form(...),
+        stage: str = Form(...),
+        _: None = Depends(auth_dependency),
+    ) -> RedirectResponse:
+        normalized = decision.lower()
+        if normalized not in {"approve", "reject"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid decision")
+        _write_decision(host, pane_id, stage, normalized)
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
     return app
 

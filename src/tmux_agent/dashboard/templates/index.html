@@ -102,6 +102,7 @@
           <th>Retries</th>
           <th>Updated</th>
           <th>Details</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -115,6 +116,24 @@
           <td>{{ row.retries }}</td>
           <td>{{ row.updated_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z') }}</td>
           <td class="details">{{ row.details }}</td>
+          <td>
+            {% if row.status == "WAITING_APPROVAL" %}
+            <form method="post" action="/approvals/approve" style="display:inline;">
+              <input type="hidden" name="host" value="{{ row.host }}" />
+              <input type="hidden" name="pane_id" value="{{ row.pane_id }}" />
+              <input type="hidden" name="stage" value="{{ row.stage }}" />
+              <button type="submit">Approve</button>
+            </form>
+            <form method="post" action="/approvals/reject" style="display:inline; margin-left:0.25rem;">
+              <input type="hidden" name="host" value="{{ row.host }}" />
+              <input type="hidden" name="pane_id" value="{{ row.pane_id }}" />
+              <input type="hidden" name="stage" value="{{ row.stage }}" />
+              <button type="submit">Reject</button>
+            </form>
+            {% else %}
+            <span style="color:#9ca3af;">—</span>
+            {% endif %}
+          </td>
         </tr>
         {% else %}
         <tr>
