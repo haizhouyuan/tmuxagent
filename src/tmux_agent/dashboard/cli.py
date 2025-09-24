@@ -21,9 +21,34 @@ def main() -> None:
         default=None,
         help="Optional override for dashboard templates",
     )
+    parser.add_argument(
+        "--approval-dir",
+        type=Path,
+        default=None,
+        help="Directory where approval request files are stored",
+    )
+    parser.add_argument("--tmux-bin", default="tmux", help="tmux binary to use")
+    parser.add_argument(
+        "--tmux-socket",
+        default=None,
+        help="Optional tmux socket name (equivalent to tmux -L)",
+    )
+    parser.add_argument(
+        "--capture-lines",
+        type=int,
+        default=200,
+        help="Number of lines to capture per pane when rendering output",
+    )
     args = parser.parse_args()
 
-    config = DashboardConfig(db_path=args.db, template_path=args.templates)
+    config = DashboardConfig(
+        db_path=args.db,
+        template_path=args.templates,
+        approval_dir=args.approval_dir,
+        tmux_bin=args.tmux_bin,
+        tmux_socket=args.tmux_socket,
+        capture_lines=args.capture_lines,
+    )
     app = create_app(config)
     uvicorn.run(app, host=args.host, port=args.port)
 

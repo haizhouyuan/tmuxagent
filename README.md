@@ -24,6 +24,18 @@ python -m tmux_agent.main --config hosts.yaml --policy policy.yaml
 
 Run `python -m tmux_agent.main --help` for CLI options.
 
+### Optional: Dashboard
+```bash
+pip install .[dashboard]
+python -m tmux_agent.dashboard.cli \
+  --db ~/.tmux_agent/state.db \
+  --approval-dir ~/.tmux_agent/approvals \
+  --host 0.0.0.0 \
+  --port 8700
+```
+
+Visit `http://<nas>:8700/` for the HTML overview or `/api/overview` for JSON. 处于 `WAITING_APPROVAL` 状态的阶段会在表格中显示 “Approve / Reject” 按钮。
+
 ## Testing
 ```bash
 pip install -e .[dev]
