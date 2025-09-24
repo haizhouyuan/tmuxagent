@@ -12,6 +12,9 @@ class DashboardConfig:
         db_path: Path,
         template_path: Path | None = None,
         approval_dir: Path | None = None,
+        tmux_bin: str = "tmux",
+        tmux_socket: str | None = None,
+        capture_lines: int = 200,
     ) -> None:
         self.db_path = Path(db_path).expanduser()
         self.template_path = Path(template_path) if template_path else None
@@ -20,6 +23,9 @@ class DashboardConfig:
             if approval_dir is not None
             else Path("~/.tmux_agent/approvals").expanduser()
         )
+        self.tmux_bin = tmux_bin
+        self.tmux_socket = tmux_socket
+        self.capture_lines = capture_lines
 
     def ensure_template_path(self, fallback: Path) -> Path:
         """Return the template search path, falling back to the packaged templates."""
