@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import hashlib
 import hmac
 import time
@@ -112,9 +113,15 @@ class ApprovalManager:
     def _make_token(self, host: str, pane_id: str, stage: str) -> str:
         assert self.secret, "secret required for token generation"
         now = int(time.time())
-        payload = f"{host}|{pane_id}|{stage}|{now + self.token_ttl_sec}"
-        sig = hmac.new(self.secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
-        return f"{_b64(payload.encode())}.{_b64(sig)}"
+        payload_dict = {
+            "host": host,
+            "pane": pane_id,
+            "stage": stage,
+            "expires": now + self.token_ttl_sec,
+        }
+        payload_bytes = json.dumps(payload_dict, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        sig = hmac.new(self.secret.encode("utf-8"), payload_bytes, hashlib.sha256).digest()
+        return f"{_b64(payload_bytes)}.{_b64(sig)}"
 
     def _parse_token(self, token: str) -> tuple[str, str, str, int]:
         try:
@@ -126,8 +133,23 @@ class ApprovalManager:
         expected_sig = hmac.new(self.secret.encode("utf-8"), payload_raw, hashlib.sha256).digest()
         if not hmac.compare_digest(sig_raw, expected_sig):
             raise ValueError("Invalid signature")
-        host, pane_id, stage, expires = payload_raw.decode("utf-8").split("|", 3)
-        return host, pane_id, stage, int(expires)
+        try:
+            payload = json.loads(payload_raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("Malformed token payload") from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError("Malformed token payload")
+
+        for key in ("host", "pane", "stage", "expires"):
+            if key not in payload:
+                raise ValueError("Malformed token payload")
+
+        host = str(payload["host"])
+        pane_id = str(payload["pane"])
+        stage = str(payload["stage"])
+        expires = int(payload["expires"])
+        return host, pane_id, stage, expires
 
 
 def _b64(data: bytes) -> str:

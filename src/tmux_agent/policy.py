@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from typing import Literal
 from typing import Optional
 
 from .approvals import ApprovalManager
@@ -39,14 +40,20 @@ class CompiledTrigger:
 @dataclass
 class CompiledStage:
     name: str
-    triggers: list[CompiledTrigger]
+    triggers: list["TriggerGroup"]
     actions_on_start: list[ActionSpec]
-    success_when: list[CompiledTrigger]
-    fail_when: list[CompiledTrigger]
+    success_when: list["TriggerGroup"]
+    fail_when: list["TriggerGroup"]
     require_approval: bool
     retry_max: int
     ask_human_prompt: Optional[str]
     escalate_code: Optional[str]
+
+
+@dataclass
+class TriggerGroup:
+    mode: Literal["any_of", "all_of", "unknown"]
+    triggers: list[CompiledTrigger]
 
 
 @dataclass
@@ -78,6 +85,7 @@ class Action:
     pane_id: str
     command: str
     enter: bool = True
+    kind: Literal["send_keys", "shell"] = "send_keys"
 
 
 @dataclass
@@ -115,13 +123,21 @@ class PolicyEngine:
         )
 
     def _compile_stage(self, stage: StageConfig) -> CompiledStage:
-        def compile_block(block: Optional[dict[str, list[TriggerSpec]]]) -> list[CompiledTrigger]:
+        def compile_block(block: Optional[dict[str, list[TriggerSpec]]]) -> list[TriggerGroup]:
             if not block:
                 return []
-            triggers = []
-            for specs in block.values():
-                triggers.extend(CompiledTrigger.from_spec(spec) for spec in specs)
-            return triggers
+            groups: list[TriggerGroup] = []
+            for mode, specs in block.items():
+                compiled = [CompiledTrigger.from_spec(spec) for spec in specs]
+                normalised_mode: Literal["any_of", "all_of", "unknown"]
+                if mode == "any_of":
+                    normalised_mode = "any_of"
+                elif mode == "all_of":
+                    normalised_mode = "all_of"
+                else:
+                    normalised_mode = "unknown"
+                groups.append(TriggerGroup(mode=normalised_mode, triggers=compiled))
+            return groups
 
         retry_max = 0
         ask_prompt: Optional[str] = None
@@ -272,7 +288,16 @@ class PolicyEngine:
                         )
                     else:
                         state.status = StageStatus.FAILED
-                        state.data = {"failed_at": now, "reason": "fail_condition"}
+                        fail_payload = {"failed_at": now, "reason": "fail_condition"}
+                        if stage.escalate_code:
+                            fail_payload["escalate_code"] = stage.escalate_code
+                            notifications.append(
+                                NotificationMessage(
+                                    title=f"Escalation: {pipeline.name}/{stage.name}",
+                                    body=f"Escalation code `{stage.escalate_code}` triggered for {pane.pane_id}",
+                                )
+                            )
+                        state.data = fail_payload
 
             state.updated_at = now
             self.store.save_stage_state(state)
@@ -303,7 +328,7 @@ class PolicyEngine:
     def _conditions_met(
         self,
         host: str,
-        triggers: list[CompiledTrigger],
+        triggers: list[TriggerGroup],
         pipeline: CompiledPipeline,
         pane: PaneInfo,
         new_lines: list[str],
@@ -311,20 +336,54 @@ class PolicyEngine:
     ) -> bool:
         if not triggers:
             return False
-        for trigger in triggers:
-            if trigger.log_regex and any(trigger.log_regex.search(line) for line in new_lines):
+        for group in triggers:
+            if self._group_satisfied(host, pipeline, pane, new_lines, messages, group):
                 return True
-            if trigger.message_type and any(msg.kind == trigger.message_type for msg in messages):
+        return False
+
+    def _group_satisfied(
+        self,
+        host: str,
+        pipeline: CompiledPipeline,
+        pane: PaneInfo,
+        new_lines: list[str],
+        messages: list[ParsedMessage],
+        group: TriggerGroup,
+    ) -> bool:
+        if not group.triggers:
+            return False
+
+        evaluations = [
+            self._trigger_matches(host, pipeline, pane, new_lines, messages, trigger)
+            for trigger in group.triggers
+        ]
+        if group.mode == "all_of":
+            return all(evaluations)
+        # any_of / unknown both fall back to OR semantics
+        return any(evaluations)
+
+    def _trigger_matches(
+        self,
+        host: str,
+        pipeline: CompiledPipeline,
+        pane: PaneInfo,
+        new_lines: list[str],
+        messages: list[ParsedMessage],
+        trigger: CompiledTrigger,
+    ) -> bool:
+        if trigger.log_regex and any(trigger.log_regex.search(line) for line in new_lines):
+            return True
+        if trigger.message_type and any(msg.kind == trigger.message_type for msg in messages):
+            return True
+        if trigger.after_stage_success:
+            prev_state = self.store.load_stage_state(
+                host,
+                pane.pane_id,
+                pipeline.name,
+                trigger.after_stage_success,
+            )
+            if prev_state.status == StageStatus.COMPLETED:
                 return True
-            if trigger.after_stage_success:
-                prev_state = self.store.load_stage_state(
-                    host,
-                    pane.pane_id,
-                    pipeline.name,
-                    trigger.after_stage_success,
-                )
-                if prev_state.status == StageStatus.COMPLETED:
-                    return True
         return False
 
     def _stage_actions(self, host: str, pane: PaneInfo, stage: CompiledStage) -> list[Action]:
@@ -332,11 +391,23 @@ class PolicyEngine:
         for action in stage.actions_on_start:
             if action.send_keys:
                 actions.append(
-                    Action(host=host, pane_id=pane.pane_id, command=action.send_keys, enter=True)
+                    Action(
+                        host=host,
+                        pane_id=pane.pane_id,
+                        command=action.send_keys,
+                        enter=True,
+                        kind="send_keys",
+                    )
                 )
             if action.shell:
                 actions.append(
-                    Action(host=host, pane_id=pane.pane_id, command=action.shell, enter=False)
+                    Action(
+                        host=host,
+                        pane_id=pane.pane_id,
+                        command=action.shell,
+                        enter=False,
+                        kind="shell",
+                    )
                 )
         return actions
 

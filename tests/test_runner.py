@@ -1,3 +1,4 @@
+import types
 import yaml
 
 from tmux_agent.approvals import ApprovalManager
@@ -109,3 +110,68 @@ def test_runner_flow(state_store, tmp_path, monkeypatch):
     runner.run_once()
     build_state = state_store.load_stage_state(HOST_NAME, "%1", "demo", "build")
     assert build_state.status.value == "COMPLETED"
+
+
+def test_runner_executes_shell_action(state_store, tmp_path, monkeypatch):
+    agent_config = make_agent_config(tmp_path)
+
+    raw = yaml.safe_load(
+        """
+principles: []
+pipelines:
+  - name: demo
+    match:
+      any_of:
+        - window_name: "^agent:codex-ci$"
+    stages:
+      - name: actions
+        triggers:
+          any_of:
+            - log_regex: "shell please"
+        actions_on_start:
+          - send_keys: "say hello"
+          - shell: "echo remote"
+        success_when:
+          any_of:
+            - log_regex: "done"
+"""
+    )
+    policy = PolicyConfig.model_validate(raw)
+
+    approval_manager = ApprovalManager(state_store, tmp_path / "approvals")
+    notifier = MockNotifier()
+
+    adapter = FakeTmuxAdapter({"%1": "shell please\n"})
+    adapter.set_meta("%1", "proj:storyapp", "agent:codex-ci", "codex:ci")
+
+    runtime = HostRuntime(host=agent_config.hosts[0], adapter=adapter)
+    runner = Runner(
+        agent_config=agent_config,
+        policy=policy,
+        state_store=state_store,
+        notifier=notifier,
+        approval_manager=approval_manager,
+        adapters=[runtime],
+        dry_run=False,
+    )
+
+    calls: list[tuple[list[str], bool, dict]] = []
+
+    def fake_run(cmd, check=True, **kwargs):
+        calls.append((cmd, check, kwargs))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    runner.run_once()
+
+    assert "[SENT:say hello\n" in adapter._panes["%1"]
+    stage_state = state_store.load_stage_state(HOST_NAME, "%1", "demo", "actions")
+    assert stage_state.status.value == "RUNNING"
+    assert len(calls) == 1
+    assert calls[0][0] == ["bash", "-lc", "echo remote"]
+
+    adapter.append_output("%1", "done\n")
+    runner.run_once()
+    stage_state = state_store.load_stage_state(HOST_NAME, "%1", "demo", "actions")
+    assert stage_state.status.value == "COMPLETED"

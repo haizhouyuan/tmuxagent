@@ -36,3 +36,13 @@ def test_expired_token_cleanup(state_store, tmp_path: Path):
     past = int(time.time()) - 10
     state_store.upsert_approval_token(HOST, "%1", "stage", token, past)
     assert state_store.get_approval_token(HOST, "%1", "stage") is None
+
+
+def test_token_with_delimiters(state_store, tmp_path: Path):
+    mgr = ApprovalManager(state_store, tmp_path / "approvals", secret="secret")
+    token = mgr._make_token("local|east", "%1|42", "stage|deploy")
+    host, pane, stage, expires = mgr._parse_token(token)
+    assert host == "local|east"
+    assert pane == "%1|42"
+    assert stage == "stage|deploy"
+    assert expires > int(time.time())

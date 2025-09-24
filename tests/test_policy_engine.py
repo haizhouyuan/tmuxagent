@@ -82,3 +82,87 @@ def test_policy_flow(state_store, tmp_path):
     outcome = engine.evaluate(HOST, pane, ["build ok"], [])
     build_state = state_store.load_stage_state(HOST, "%1", "demo", "build")
     assert build_state.status == StageStatus.COMPLETED
+
+
+def test_all_of_trigger_group(state_store, tmp_path):
+    policy = load_policy(
+        """
+principles: []
+pipelines:
+  - name: demo
+    match:
+      any_of:
+        - window_name: "^agent:codex-ci$"
+    stages:
+      - name: double
+        actions_on_start:
+          - send_keys: "echo start"
+        success_when:
+          all_of:
+            - log_regex: "first marker"
+            - log_regex: "second marker"
+"""
+    )
+    approvals = ApprovalManager(state_store, tmp_path / "approvals")
+    engine = PolicyEngine(policy, state_store, approvals)
+    pane = PaneInfo(
+        pane_id="%1",
+        session_name="proj:storyapp",
+        window_name="agent:codex-ci",
+        pane_title="codex:ci",
+    )
+
+    outcome = engine.evaluate(HOST, pane, [], [])
+    assert outcome.actions[0].command == "echo start"
+    stage_state = state_store.load_stage_state(HOST, "%1", "demo", "double")
+    assert stage_state.status == StageStatus.RUNNING
+
+    engine.evaluate(HOST, pane, ["first marker"], [])
+    stage_state = state_store.load_stage_state(HOST, "%1", "demo", "double")
+    assert stage_state.status == StageStatus.RUNNING
+
+    engine.evaluate(HOST, pane, ["first marker", "second marker"], [])
+    stage_state = state_store.load_stage_state(HOST, "%1", "demo", "double")
+    assert stage_state.status == StageStatus.COMPLETED
+
+
+def test_escalation_notification(state_store, tmp_path):
+    policy = load_policy(
+        """
+principles: []
+pipelines:
+  - name: demo
+    match:
+      any_of:
+        - window_name: "^agent:codex-ci$"
+    stages:
+      - name: deploy
+        success_when:
+          any_of:
+            - log_regex: "deploy ok"
+        fail_when:
+          any_of:
+            - log_regex: "deploy failed"
+        on_fail:
+          - escalate: "deploy_failure"
+"""
+    )
+    approvals = ApprovalManager(state_store, tmp_path / "approvals")
+    engine = PolicyEngine(policy, state_store, approvals)
+    pane = PaneInfo(
+        pane_id="%1",
+        session_name="proj:storyapp",
+        window_name="agent:codex-ci",
+        pane_title="codex:ci",
+    )
+
+    engine.evaluate(HOST, pane, [], [])
+    state = state_store.load_stage_state(HOST, "%1", "demo", "deploy")
+    assert state.status == StageStatus.RUNNING
+
+    outcome = engine.evaluate(HOST, pane, ["deploy failed"], [])
+    state = state_store.load_stage_state(HOST, "%1", "demo", "deploy")
+    assert state.status == StageStatus.FAILED
+    assert outcome.notifications
+    titles = [note.title for note in outcome.notifications]
+    assert any("Escalation" in title for title in titles)

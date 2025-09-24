@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import re
+import shlex
+import subprocess
 
 from .approvals import ApprovalManager
 from .config import AgentConfig
@@ -131,12 +133,49 @@ class Runner:
                     "Skipping action for host %s while processing %s", action.host, runtime.name
                 )
                 continue
-            logger.info("Action %s on %s/%s", action.command, runtime.name, action.pane_id)
+            logger.info(
+                "Action %s (%s) on %s/%s",
+                action.command,
+                action.kind,
+                runtime.name,
+                action.pane_id,
+            )
             if self.dry_run:
                 continue
             try:
-                runtime.adapter.send_keys(action.pane_id, action.command, enter=action.enter)
+                if action.kind == "send_keys":
+                    runtime.adapter.send_keys(action.pane_id, action.command, enter=action.enter)
+                elif action.kind == "shell":
+                    self._execute_shell_action(runtime, action)
+                else:  # pragma: no cover - defensive branch
+                    logger.error("Unknown action kind %s", action.kind)
             except Exception as exc:  # pragma: no cover
                 logger.error(
-                    "Failed to send keys to pane %s on %s: %s", action.pane_id, runtime.name, exc
+                    "Failed to execute action %s for pane %s on %s: %s",
+                    action.kind,
+                    action.pane_id,
+                    runtime.name,
+                    exc,
                 )
+
+    def _execute_shell_action(self, runtime: HostRuntime, action: Action) -> None:
+        host_cfg = runtime.host
+        ssh_cfg = host_cfg.ssh
+        if ssh_cfg:
+            ssh_cmd = [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                f"ConnectTimeout={ssh_cfg.timeout}",
+                "-p",
+                str(ssh_cfg.port),
+            ]
+            if ssh_cfg.key_path:
+                ssh_cmd += ["-i", ssh_cfg.key_path]
+            target = f"{ssh_cfg.user}@{ssh_cfg.host}" if ssh_cfg.user else ssh_cfg.host
+            remote_command = f"bash -lc {shlex.quote(action.command)}"
+            ssh_cmd.extend([target, remote_command])
+            subprocess.run(ssh_cmd, check=True)
+        else:
+            subprocess.run(["bash", "-lc", action.command], check=True)
