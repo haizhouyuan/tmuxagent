@@ -1,148 +1,1369 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>tmux-agent dashboard</title>
+    <title>tmux-agent 控制台</title>
     <style>
+      :root {
+        color-scheme: light dark;
+      }
+      .board-sessions-container {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+      }
+      * {
+        box-sizing: border-box;
+      }
       body {
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        margin: 2rem;
-        background: #f9fafb;
+        font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #f4f6fb;
         color: #111827;
       }
-      h1 {
-        font-size: 1.8rem;
-        margin-bottom: 0.5rem;
-      }
-      .summary {
+      header {
         display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1.25rem 2rem;
+        background: #ffffff;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.1);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+      header h1 {
+        font-size: 1.5rem;
+        margin: 0;
+      }
+      header .header-actions {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+      }
+      button {
+        border: none;
+        border-radius: 0.45rem;
+        padding: 0.45rem 0.9rem;
+        font-size: 0.9rem;
+        cursor: pointer;
+        background: #2563eb;
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        transition: transform 0.1s ease, background 0.2s ease;
+      }
+      button:hover {
+        background: #1e4ed9;
+      }
+      button:active {
+        transform: scale(0.97);
+      }
+      button.button-secondary {
+        background: #e5e7eb;
+        color: #1f2937;
+      }
+      button.button-secondary:hover {
+        background: #d1d5db;
+      }
+      main {
+        padding: 1.5rem 2rem 2rem;
+      }
+      .dashboard-layout {
+        display: grid;
+        grid-template-columns: minmax(320px, 420px) 1fr;
+        gap: 1.5rem;
+        align-items: start;
+      }
+      @media (max-width: 1200px) {
+        .dashboard-layout {
+          grid-template-columns: 1fr;
+        }
+      }
+      section {
+        background: #ffffff;
+        border-radius: 0.75rem;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+        padding: 1.5rem;
+      }
+      section h2 {
+        margin: 0 0 1rem;
+        font-size: 1.25rem;
+      }
+      .board-container {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+        max-height: 68vh;
+        overflow-y: auto;
+        padding-right: 0.4rem;
+      }
+      .board-project {
+        border: 1px solid #cbd5f5;
+        border-radius: 0.85rem;
+        padding: 1rem 1.1rem;
+        background: linear-gradient(145deg, #f8fafc 0%, #eef2ff 60%);
+      }
+      .board-project--attention {
+        border-color: rgba(248, 113, 113, 0.5);
+        box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.2);
+      }
+      .board-project-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.85rem;
+      }
+      .board-project-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #1e293b;
+      }
+      .board-session {
+        border: 1px solid #e2e8f0;
+        border-radius: 0.75rem;
+        padding: 1rem 1.1rem;
+        background: #f8fafc;
+      }
+      .board-session--attention {
+        border-color: rgba(248, 113, 113, 0.45);
+      }
+      .board-session-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.75rem;
+      }
+      .board-session-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #1f2937;
+      }
+      .board-windows {
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+      }
+      .board-window {
+        border: 1px solid #cbd5f5;
+        border-radius: 0.6rem;
+        padding: 0.75rem 0.9rem;
+        background: #ffffff;
+      }
+      .board-window-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.6rem;
+        margin-bottom: 0.55rem;
+      }
+      .board-window-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #1e293b;
+      }
+      .board-pane-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .board-pane-item {
+        display: flex;
+        gap: 0.75rem;
+        align-items: stretch;
+        background: #f1f5f9;
+        border-radius: 0.6rem;
+        padding: 0.65rem 0.85rem;
+      }
+      .board-pane-main {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+        flex: 1;
+      }
+      .board-pane-name {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #0f172a;
+      }
+      .board-pane-summary {
+        font-size: 0.78rem;
+        color: #334155;
+        max-width: 28rem;
+        word-break: break-word;
+        white-space: pre-wrap;
+        border-radius: 0.45rem;
+        background: #e2e8f0;
+        padding: 0.45rem 0.55rem;
+        line-height: 1.25;
+        font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
+        max-height: 9.5rem;
+        overflow: auto;
+      }
+      .board-pane-summary.ai {
+        margin-top: 0.25rem;
+        background: rgba(37, 99, 235, 0.12);
+        color: #1d4ed8;
+        font-weight: 600;
+        white-space: pre-wrap;
+      }
+      .board-pane-meta {
+        font-size: 0.75rem;
+        color: #94a3b8;
+      }
+      .board-pane-item--attention {
+        border: 1px solid rgba(248, 113, 113, 0.45);
+        background: rgba(254, 202, 202, 0.35);
+      }
+      .board-pane-item--focused {
+        border: 1px solid rgba(37, 99, 235, 0.5);
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+      }
+      .board-pane-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+      }
+      .board-pane-actions button {
+        border: none;
+        background: #2563eb;
+        color: #ffffff;
+        font-size: 0.75rem;
+        border-radius: 0.5rem;
+        padding: 0.35rem 0.6rem;
+        cursor: pointer;
+      }
+      .board-pane-actions button:hover {
+        background: #1d4ed8;
+      }
+
+      .pane-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin-bottom: 1.25rem;
+      }
+      .pane-toolbar input[type="search"] {
+        flex: 1;
+        min-width: 220px;
+        padding: 0.5rem 0.75rem;
+        border-radius: 0.6rem;
+        border: 1px solid #d1d5db;
+        font-size: 0.9rem;
+      }
+      .pane-grid {
+        display: grid;
         gap: 1rem;
-        margin: 1.5rem 0;
+        grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+        align-items: start;
       }
-      .summary-card {
-        background: white;
+      .pane-grid.layout-single {
+        grid-template-columns: 1fr;
+      }
+      .pane-grid.layout-dual {
+        grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      }
+      .pane-grid.layout-triple {
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      }
+      .pane-card {
+        border-radius: 0.9rem;
+        border: 1px solid #dbe2f1;
+        background: #0f172a;
+        color: #e2e8f0;
+        display: flex;
+        flex-direction: column;
+        min-height: 320px;
+        position: relative;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, border 0.15s ease;
+      }
+      .pane-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35);
+      }
+      .pane-card--attention {
+        border-color: rgba(248, 113, 113, 0.55);
+        box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.3);
+      }
+      .pane-card--focused {
+        border-color: rgba(37, 99, 235, 0.6);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+      }
+      .pane-card--pinned {
+        border: 2px solid #facc15;
+        box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.3);
+      }
+      .pane-header {
+        padding: 0.85rem 1.1rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+      .pane-header-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+      }
+      .pane-title {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        display: flex;
+        gap: 0.45rem;
+        align-items: baseline;
+        flex-wrap: wrap;
+        color: #f8fafc;
+      }
+      .pane-title-main {
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      .pane-title-sub {
+        font-size: 0.85rem;
+        color: #94a3b8;
+      }
+      .pane-meta {
+        font-size: 0.8rem;
+        color: #94a3b8;
+      }
+      .pane-meta-info {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .pane-meta-info span {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      .pane-controls {
+        display: flex;
+        gap: 0.35rem;
+      }
+      .pane-controls button {
+        background: rgba(148, 163, 184, 0.2);
+        color: #f8fafc;
+        padding: 0.35rem 0.65rem;
         border-radius: 0.5rem;
-        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
-        padding: 1rem 1.25rem;
-        min-width: 9rem;
+        font-size: 0.8rem;
       }
-      table {
+      .pane-controls button:hover {
+        background: rgba(148, 163, 184, 0.35);
+      }
+      .pane-header-side {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+      .pane-summary {
+        font-size: 0.78rem;
+        color: #e2e8f0;
+        margin-top: 0.4rem;
+        padding: 0.45rem 0.65rem;
+        background: rgba(15, 23, 42, 0.78);
+        border-radius: 0.6rem;
+        max-height: 6.2rem;
+        overflow: auto;
+        white-space: pre-wrap;
+        text-overflow: clip;
+        line-height: 1.25;
+        font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
+      }
+      .pane-ai-summary {
+        margin-top: 0.6rem;
+        background: rgba(14, 23, 42, 0.75);
+        border: 1px solid rgba(59, 130, 246, 0.35);
+        border-radius: 0.75rem;
+        padding: 0.55rem 0.7rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+      }
+      .pane-ai-summary header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .pane-ai-summary header h4 {
+        margin: 0;
+        font-size: 0.85rem;
+        color: #bfdbfe;
+      }
+      .pane-ai-summary button {
+        border: none;
+        background: rgba(59, 130, 246, 0.85);
+        color: #ffffff;
+        border-radius: 0.45rem;
+        padding: 0.25rem 0.55rem;
+        font-size: 0.75rem;
+        cursor: pointer;
+      }
+      .pane-ai-summary button:hover {
+        background: rgba(37, 99, 235, 0.95);
+      }
+      .pane-ai-summary-body {
+        font-size: 0.8rem;
+        color: #e2e8f0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 12rem;
+        overflow-y: auto;
+      }
+      .pane-ai-summary-body.loading {
+        color: #93c5fd;
+      }
+      .pane-ai-summary-body.error {
+        color: #fca5a5;
+      }
+      .active-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.75rem;
+        padding: 0.1rem 0.6rem;
+        border-radius: 999px;
+        background: rgba(16, 185, 129, 0.18);
+        color: #34d399;
+      }
+      .log-wrapper {
+        position: relative;
+        padding: 0.4rem 0.9rem 0.9rem;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+      .pane-log {
+        margin: 0;
+        padding: 0.8rem 1rem;
+        background: rgba(15, 23, 42, 0.9);
+        border-radius: 0.75rem;
+        font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.85rem;
+        line-height: 1.45;
+        overflow-y: auto;
+        max-height: 320px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+      }
+      .pane-card[data-expanded="true"] .pane-log {
+        max-height: 70vh;
+      }
+      .pane-card[data-expanded="true"] {
+        grid-column: 1 / -1;
+      }
+      .jump-bottom {
+        position: absolute;
+        bottom: 1.5rem;
+        right: 1.5rem;
+        background: rgba(37, 99, 235, 0.85);
+        color: #ffffff;
+        border-radius: 999px;
+        padding: 0.35rem 0.9rem;
+        font-size: 0.8rem;
+        border: none;
+        cursor: pointer;
+        display: none;
+      }
+      .jump-bottom.visible {
+        display: inline-flex;
+      }
+      .pane-footer {
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+        padding: 0.9rem 1.1rem 1.2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.7rem;
+        background: rgba(10, 16, 32, 0.95);
+      }
+      .pane-footer textarea {
         width: 100%;
-        border-collapse: collapse;
-        background: white;
-        border-radius: 0.5rem;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
-        overflow: hidden;
+        min-height: 3.5rem;
+        max-height: 12rem;
+        border-radius: 0.6rem;
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        background: rgba(2, 6, 23, 0.9);
+        color: #e2e8f0;
+        padding: 0.6rem 0.75rem;
+        font-family: inherit;
+        font-size: 0.9rem;
+        resize: vertical;
       }
-      th, td {
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid #e5e7eb;
-        text-align: left;
+      .pane-footer textarea:focus {
+        outline: 2px solid rgba(59, 130, 246, 0.6);
       }
-      th {
-        background: #f3f4f6;
-        font-weight: 600;
-        text-transform: uppercase;
-        font-size: 0.75rem;
+      .pane-footer-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        align-items: center;
+      }
+      .pane-footer-controls label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.8rem;
+        color: #cbd5f5;
+      }
+      .pane-footer-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .pane-footer-actions button {
+        background: rgba(37, 99, 235, 0.85);
+        color: #ffffff;
+        font-size: 0.85rem;
+        padding: 0.4rem 0.9rem;
+      }
+      .pane-footer-actions button.button-muted {
+        background: rgba(148, 163, 184, 0.2);
+        color: #cbd5f5;
+      }
+      .pane-footer-actions button.button-danger {
+        background: rgba(248, 113, 113, 0.28);
+        color: #fca5a5;
+      }
+      .hidden {
+        display: none !important;
+      }
+      .details-cell {
+        font-size: 0.8rem;
         color: #4b5563;
-      }
-      tbody tr:hover {
-        background: #f9fafb;
-      }
-      .status {
-        font-weight: 600;
-        text-transform: uppercase;
-        font-size: 0.75rem;
-      }
-      .status-RUNNING { color: #16a34a; }
-      .status-WAITING_APPROVAL { color: #eab308; }
-      .status-WAITING_TRIGGER { color: #6b7280; }
-      .status-COMPLETED { color: #2563eb; }
-      .status-FAILED { color: #dc2626; }
-      .details {
-        font-size: 0.75rem;
-        color: #4b5563;
-        max-width: 18rem;
+        max-width: 260px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      footer {
-        margin-top: 2rem;
-        font-size: 0.75rem;
-        color: #6b7280;
+      .details-cell:hover {
+        white-space: normal;
+        word-break: break-word;
+        background: #f1f5f9;
+      }
+      .empty-state {
+        padding: 1.5rem;
+        text-align: center;
+        color: #64748b;
       }
     </style>
   </head>
   <body>
-    <h1>tmux-agent dashboard</h1>
-    <p>当前跟踪的 stage 状态快照。</p>
-
-    <section class="summary">
-      {% if summary %}
-        {% for status, count in summary.items() %}
-        <div class="summary-card">
-          <div class="status status-{{ status }}">{{ status.replace("_", " ") }}</div>
-          <div style="font-size:1.5rem; font-weight:700;">{{ count }}</div>
-        </div>
-        {% endfor %}
-      {% else %}
-        <div>暂无数据。</div>
-      {% endif %}
-    </section>
-
-    <table>
-      <thead>
-        <tr>
-          <th>Host</th>
-          <th>Pane</th>
-          <th>Pipeline</th>
-          <th>Stage</th>
-          <th>Status</th>
-          <th>Retries</th>
-          <th>Updated</th>
-          <th>Details</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td>{{ row.host }}</td>
-          <td>{{ row.pane_id }}</td>
-          <td>{{ row.pipeline }}</td>
-          <td>{{ row.stage }}</td>
-          <td class="status status-{{ row.status }}">{{ row.status }}</td>
-          <td>{{ row.retries }}</td>
-          <td>{{ row.updated_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z') }}</td>
-          <td class="details">{{ row.details }}</td>
-          <td>
-            {% if row.status == "WAITING_APPROVAL" %}
-            <form method="post" action="/approvals/approve" style="display:inline">
-              <input type="hidden" name="host" value="{{ row.host }}" />
-              <input type="hidden" name="pane_id" value="{{ row.pane_id }}" />
-              <input type="hidden" name="stage" value="{{ row.stage }}" />
-              <button type="submit">Approve</button>
-            </form>
-            <form method="post" action="/approvals/reject" style="display:inline; margin-left:0.25rem">
-              <input type="hidden" name="host" value="{{ row.host }}" />
-              <input type="hidden" name="pane_id" value="{{ row.pane_id }}" />
-              <input type="hidden" name="stage" value="{{ row.stage }}" />
-              <button type="submit">Reject</button>
-            </form>
+    <header>
+      <h1>tmux-agent 控制台</h1>
+      <div class="header-actions">
+        <button id="toggle-refresh" class="button-secondary">暂停自动刷新</button>
+        <button id="manual-refresh">立即刷新</button>
+      </div>
+    </header>
+    <main>
+      <div class="dashboard-layout">
+        <section aria-labelledby="board-section-title">
+          <h2 id="board-section-title">调度控制板</h2>
+          <div class="board-container" id="board-container">
+            <div class="empty-state">正在加载 pane 状态...</div>
+          </div>
+        </section>
+        <section aria-labelledby="pane-section-title">
+          <h2 id="pane-section-title">实时 Pane</h2>
+          <div class="pane-toolbar">
+            <input id="pane-filter" type="search" placeholder="搜索 session / window / title / pane id" />
+            <button id="cycle-layout" class="button-secondary">布局: 自适应</button>
+          </div>
+          <div class="pane-grid" id="pane-grid">
+            {% for pane in panes %}
+              {% set activity = pane_activity.get(pane.pane_id) %}
+              <article class="pane-card" data-pane-id="{{ pane.pane_id }}" data-session="{{ pane.session }}" data-window="{{ pane.window }}" data-title="{{ pane.title }}" data-expanded="false" data-status="{{ (activity.status if activity else 'UNKNOWN') }}">
+                <header class="pane-header">
+                  <div class="pane-header-main">
+                    <h3 class="pane-title">
+                      <span class="pane-title-main">{{ pane.title or '未命名 Pane' }}</span>
+                      <span class="pane-title-sub">{{ pane.session }}/{{ pane.window }}</span>
+                    </h3>
+                    <div class="pane-header-side">
+                      <div class="pane-controls">
+                        <button type="button" class="toggle-pin" aria-label="置顶">📌</button>
+                        <button type="button" class="toggle-expand" aria-label="放大">⤢</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="pane-meta pane-meta-info">
+                    <span class="pane-session">Session: {{ pane.session }}</span>
+                    <span class="pane-window">Window: {{ pane.window or '—' }}</span>
+                    <span class="pane-id">Pane: {{ pane.pane_id }}</span>
+                    <span class="pane-size{% if not (pane.width and pane.height) %} hidden{% endif %}">{% if pane.width and pane.height %}Size: {{ pane.width }}×{{ pane.height }}{% endif %}</span>
+                    {% if pane.is_active %}
+                      <span class="active-indicator">● 活跃</span>
+                    {% endif %}
+                  </div>
+                  <div class="pane-summary" data-pane-summary>{{ activity.summary if activity else '' }}</div>
+                </header>
+                <div class="pane-ai-summary" data-pane-ai-summary>
+                  <header>
+                    <h4>AI 总结</h4>
+                    <button type="button" class="pane-ai-summary-btn" data-pane-id="{{ pane.pane_id }}">生成</button>
+                  </header>
+                  <div class="pane-ai-summary-body" data-pane-ai-summary-body>点击“生成”获取最新摘要</div>
+                </div>
+                <div class="log-wrapper">
+                  <pre class="pane-log" data-pane-id="{{ pane.pane_id }}">{{ pane.text }}</pre>
+                  <button type="button" class="jump-bottom" data-pane-id="{{ pane.pane_id }}">回到底部</button>
+                </div>
+                <footer class="pane-footer">
+                  <textarea placeholder="输入命令，Ctrl+Enter 发送" data-pane-id="{{ pane.pane_id }}"></textarea>
+                  <div class="pane-footer-controls">
+                    <label><input type="checkbox" class="enter-toggle" data-pane-id="{{ pane.pane_id }}" checked /> 附带回车</label>
+                    <span style="font-size:0.75rem;color:#64748b;">捕获 {{ capture_lines }} 行</span>
+                  </div>
+                  <div class="pane-footer-actions">
+                    <button type="button" class="send-command" data-pane-id="{{ pane.pane_id }}">发送</button>
+                    <button type="button" class="send-enter button-secondary" data-pane-id="{{ pane.pane_id }}">只发送回车</button>
+                    <button type="button" class="send-clear button-muted" data-pane-id="{{ pane.pane_id }}">清空输入</button>
+                    <button type="button" class="send-key button-muted" data-pane-id="{{ pane.pane_id }}" data-keys='["C-c"]'>Ctrl+C</button>
+                    <button type="button" class="send-key button-muted" data-pane-id="{{ pane.pane_id }}" data-keys='["C-d"]'>Ctrl+D</button>
+                    <button type="button" class="send-key button-muted" data-pane-id="{{ pane.pane_id }}" data-keys='["C-l"]'>Ctrl+L</button>
+                    <button type="button" class="send-key button-muted" data-pane-id="{{ pane.pane_id }}" data-keys='["Up"]'>↑</button>
+                    <button type="button" class="send-key button-muted" data-pane-id="{{ pane.pane_id }}" data-keys='["Down"]'>↓</button>
+                  </div>
+                </footer>
+              </article>
             {% else %}
-            <span style="color:#9ca3af;">—</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="8" style="text-align:center; padding:2rem; color:#6b7280;">尚未记录任何 stage。</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+              <div class="empty-state">当前未检测到任何 tmux pane。</div>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    </main>
+    <template id="pane-template">
+      <article class="pane-card" data-expanded="false">
+        <header class="pane-header">
+          <div class="pane-header-main">
+            <h3 class="pane-title">
+              <span class="pane-title-main"></span>
+              <span class="pane-title-sub"></span>
+            </h3>
+            <div class="pane-header-side">
+              <div class="pane-controls">
+                <button type="button" class="toggle-pin" aria-label="置顶">📌</button>
+                <button type="button" class="toggle-expand" aria-label="放大">⤢</button>
+              </div>
+            </div>
+          </div>
+          <div class="pane-meta pane-meta-info">
+            <span class="pane-session"></span>
+            <span class="pane-window"></span>
+            <span class="pane-id"></span>
+            <span class="pane-size hidden"></span>
+          </div>
+          <div class="pane-summary" data-pane-summary></div>
+        </header>
+        <div class="pane-ai-summary" data-pane-ai-summary>
+          <header>
+            <h4>AI 总结</h4>
+            <button type="button" class="pane-ai-summary-btn">生成</button>
+          </header>
+          <div class="pane-ai-summary-body" data-pane-ai-summary-body>点击“生成”获取最新摘要</div>
+        </div>
+        <div class="log-wrapper">
+          <pre class="pane-log"></pre>
+          <button type="button" class="jump-bottom">回到底部</button>
+        </div>
+        <footer class="pane-footer">
+          <textarea placeholder="输入命令，Ctrl+Enter 发送"></textarea>
+          <div class="pane-footer-controls">
+            <label><input type="checkbox" class="enter-toggle" checked /> 附带回车</label>
+            <span style="font-size:0.75rem;color:#64748b;"></span>
+          </div>
+          <div class="pane-footer-actions">
+            <button type="button" class="send-command">发送</button>
+            <button type="button" class="send-enter button-secondary">只发送回车</button>
+            <button type="button" class="send-clear button-muted">清空输入</button>
+            <button type="button" class="send-key button-muted" data-keys='["C-c"]'>Ctrl+C</button>
+            <button type="button" class="send-key button-muted" data-keys='["C-d"]'>Ctrl+D</button>
+            <button type="button" class="send-key button-muted" data-keys='["C-l"]'>Ctrl+L</button>
+            <button type="button" class="send-key button-muted" data-keys='["Up"]'>↑</button>
+            <button type="button" class="send-key button-muted" data-keys='["Down"]'>↓</button>
+          </div>
+        </footer>
+      </article>
+    </template>
+    <script>
+      window.dashboardBootstrap = {
+        board: {{ board | tojson }},
+        projects: {{ projects | tojson }},
+        pane_activity: {{ pane_activity | tojson }},
+        panes: {{ panes | tojson }}
+      };
+      window.captureLines = {{ capture_lines }};
+    </script>
+    <script>
+      const refreshButton = document.getElementById('manual-refresh');
+      const toggleRefreshButton = document.getElementById('toggle-refresh');
+      const layoutButton = document.getElementById('cycle-layout');
+      const paneGrid = document.getElementById('pane-grid');
+      const boardContainer = document.getElementById('board-container');
+      const paneFilterInput = document.getElementById('pane-filter');
+      const paneTemplate = document.getElementById('pane-template');
 
-    <footer>Powered by tmux-agent.</footer>
+      const pinnedStorageKey = 'tmux-dashboard-pinned';
+      const layoutStorageKey = 'tmux-dashboard-layout';
+
+      const pinnedPanes = new Set(JSON.parse(localStorage.getItem(pinnedStorageKey) || '[]'));
+      let layoutMode = localStorage.getItem(layoutStorageKey) || 'auto';
+      applyLayoutMode();
+
+      const paneState = new Map();
+      let paneActivityStore = new Map(Object.entries(window.dashboardBootstrap.pane_activity || {}));
+      let projectStore = window.dashboardBootstrap.projects || [];
+      const paneSummaryCache = new Map();
+      const refreshIntervalMs = 3000;
+      let refreshTimer = null;
+      let autoRefreshEnabled = true;
+
+      function scheduleRefresh() {
+        clearInterval(refreshTimer);
+        if (autoRefreshEnabled) {
+          refreshTimer = setInterval(fetchDashboardState, refreshIntervalMs);
+        }
+      }
+
+      function applyLayoutMode() {
+        paneGrid.classList.remove('layout-single', 'layout-dual', 'layout-triple');
+        if (layoutMode === 'single') {
+          paneGrid.classList.add('layout-single');
+          layoutButton.textContent = '布局: 单列';
+        } else if (layoutMode === 'dual') {
+          paneGrid.classList.add('layout-dual');
+          layoutButton.textContent = '布局: 双列';
+        } else if (layoutMode === 'triple') {
+          paneGrid.classList.add('layout-triple');
+          layoutButton.textContent = '布局: 三列';
+        } else {
+          layoutButton.textContent = '布局: 自适应';
+        }
+      }
+
+      function cycleLayoutMode() {
+        const sequence = ['auto', 'single', 'dual', 'triple'];
+        const idx = sequence.indexOf(layoutMode);
+        layoutMode = sequence[(idx + 1) % sequence.length];
+        localStorage.setItem(layoutStorageKey, layoutMode);
+        applyLayoutMode();
+      }
+
+      let focusedPaneId = null;
+
+      function renderBoard(projects) {
+        boardContainer.innerHTML = '';
+        if (!projects || !projects.length) {
+          const div = document.createElement('div');
+          div.className = 'empty-state';
+          div.textContent = '暂无活跃 pane。';
+          boardContainer.appendChild(div);
+          return;
+        }
+
+        for (const project of projects) {
+          const projectEl = document.createElement('div');
+          projectEl.className = 'board-project';
+          if (project.attention) {
+            projectEl.classList.add('board-project--attention');
+          }
+
+          const projectHeader = document.createElement('div');
+          projectHeader.className = 'board-project-header';
+          const projectTitle = document.createElement('div');
+          projectTitle.className = 'board-project-title';
+          projectTitle.textContent = project.name;
+          projectHeader.appendChild(projectTitle);
+          projectEl.appendChild(projectHeader);
+
+          const sessions = document.createElement('div');
+          sessions.className = 'board-sessions-container';
+
+          for (const session of project.sessions) {
+            const sessionEl = document.createElement('div');
+            sessionEl.className = 'board-session';
+            if (session.attention) {
+              sessionEl.classList.add('board-session--attention');
+            }
+
+            const header = document.createElement('div');
+            header.className = 'board-session-header';
+            const title = document.createElement('div');
+            title.className = 'board-session-title';
+            title.textContent = session.session;
+            header.appendChild(title);
+            sessionEl.appendChild(header);
+
+            const windowList = document.createElement('div');
+            windowList.className = 'board-windows';
+
+            for (const windowItem of session.windows) {
+              const windowEl = document.createElement('div');
+              windowEl.className = 'board-window';
+              if (windowItem.attention) {
+                windowEl.classList.add('board-session--attention');
+              }
+
+              const windowHeader = document.createElement('div');
+              windowHeader.className = 'board-window-header';
+              const windowTitle = document.createElement('div');
+              windowTitle.className = 'board-window-title';
+              windowTitle.textContent = windowItem.window;
+              windowHeader.appendChild(windowTitle);
+              windowEl.appendChild(windowHeader);
+
+              const paneList = document.createElement('div');
+              paneList.className = 'board-pane-list';
+              for (const pane of windowItem.panes) {
+                const paneRow = document.createElement('div');
+                paneRow.className = 'board-pane-item';
+                if (pane.attention) {
+                  paneRow.classList.add('board-pane-item--attention');
+                }
+                if (pane.pane_id === focusedPaneId) {
+                  paneRow.classList.add('board-pane-item--focused');
+                }
+                const paneMain = document.createElement('div');
+                paneMain.className = 'board-pane-main';
+                const paneName = document.createElement('div');
+                paneName.className = 'board-pane-name';
+                paneName.textContent = pane.title || pane.pane_id;
+                paneMain.appendChild(paneName);
+                const tailText = (pane.tail_excerpt && pane.tail_excerpt.trim()) || (pane.summary && pane.summary.trim()) || '';
+                if (tailText) {
+                  const paneTail = document.createElement('div');
+                  paneTail.className = 'board-pane-summary';
+                  paneTail.textContent = tailText;
+                  paneMain.appendChild(paneTail);
+                }
+                const cachedSummary = paneSummaryCache.get(pane.pane_id);
+                if (cachedSummary) {
+                  const paneSummary = document.createElement('div');
+                  paneSummary.className = 'board-pane-summary ai';
+                  paneSummary.textContent = cachedSummary;
+                  paneMain.appendChild(paneSummary);
+                }
+                const paneMeta = document.createElement('div');
+                paneMeta.className = 'board-pane-meta';
+                paneMeta.textContent = `${pane.session}/${pane.window}`;
+                paneMain.appendChild(paneMeta);
+                paneRow.appendChild(paneMain);
+
+                const actions = document.createElement('div');
+                actions.className = 'board-pane-actions';
+                const summaryBtn = document.createElement('button');
+                summaryBtn.type = 'button';
+                summaryBtn.dataset.summaryPane = pane.pane_id;
+                summaryBtn.textContent = 'AI总结';
+                actions.appendChild(summaryBtn);
+                const focusBtn = document.createElement('button');
+                focusBtn.type = 'button';
+                focusBtn.dataset.focusPane = pane.pane_id;
+                focusBtn.textContent = focusedPaneId === pane.pane_id ? '取消聚焦' : '聚焦';
+                actions.appendChild(focusBtn);
+                paneRow.appendChild(actions);
+                paneList.appendChild(paneRow);
+              }
+
+              windowEl.appendChild(paneList);
+              windowList.appendChild(windowEl);
+            }
+
+            sessionEl.appendChild(windowList);
+            sessions.appendChild(sessionEl);
+          }
+
+          projectEl.appendChild(sessions);
+          boardContainer.appendChild(projectEl);
+        }
+      }
+
+      function applyPaneStatus(card, activity) {
+        const status = activity && activity.status ? activity.status : 'UNKNOWN';
+        card.dataset.status = status;
+        card.classList.toggle('pane-card--attention', Boolean(activity && activity.attention));
+        const summaryEl = card.querySelector('[data-pane-summary]');
+        if (summaryEl) {
+          if (activity && activity.tail_excerpt) {
+            summaryEl.textContent = activity.tail_excerpt;
+          } else if (activity && activity.summary) {
+            summaryEl.textContent = activity.summary;
+          } else {
+            summaryEl.textContent = '';
+          }
+        }
+        card.classList.toggle('pane-card--focused', focusedPaneId === card.dataset.paneId);
+      }
+
+      function applyPaneAiSummary(card, paneId) {
+        const summaryBody = card.querySelector('[data-pane-ai-summary-body]');
+        if (!summaryBody) {
+          return;
+        }
+        summaryBody.classList.remove('error', 'loading');
+        const cached = paneSummaryCache.get(paneId);
+        summaryBody.textContent = cached || '点击“生成”获取最新摘要';
+      }
+
+      function ensurePaneCard(paneId) {
+        let card = paneGrid.querySelector(`[data-pane-id="${paneId}"]`);
+        if (card) {
+          applyPaneStatus(card, paneActivityStore.get(paneId));
+          applyPaneAiSummary(card, paneId);
+          return card;
+        }
+        const fragment = paneTemplate.content.cloneNode(true);
+        card = fragment.querySelector('.pane-card');
+        card.dataset.paneId = paneId;
+        const log = card.querySelector('.pane-log');
+        log.dataset.paneId = paneId;
+        const textarea = card.querySelector('textarea');
+        textarea.dataset.paneId = paneId;
+        card.querySelector('.jump-bottom').dataset.paneId = paneId;
+        card.querySelector('.send-command').dataset.paneId = paneId;
+        card.querySelector('.send-enter').dataset.paneId = paneId;
+        card.querySelector('.send-clear').dataset.paneId = paneId;
+        const keyButtons = card.querySelectorAll('.send-key');
+        keyButtons.forEach((btn) => {
+          btn.dataset.paneId = paneId;
+        });
+        card.querySelector('.enter-toggle').dataset.paneId = paneId;
+        card.querySelector('.toggle-pin').dataset.paneId = paneId;
+        card.querySelector('.toggle-expand').dataset.paneId = paneId;
+        const captureInfo = card.querySelector('.pane-footer-controls span');
+        if (captureInfo) {
+          captureInfo.textContent = `捕获 ${window.captureLines} 行`;
+        }
+        paneGrid.appendChild(fragment);
+        card = paneGrid.querySelector(`[data-pane-id="${paneId}"]`);
+        registerPaneListeners(card);
+        applyPaneStatus(card, paneActivityStore.get(paneId));
+        applyPaneAiSummary(card, paneId);
+        return card;
+      }
+
+      function updatePaneCard(card, pane) {
+        card.dataset.session = pane.session;
+        card.dataset.window = pane.window;
+        card.dataset.title = pane.title;
+        const titleMain = card.querySelector('.pane-title-main');
+        const titleSub = card.querySelector('.pane-title-sub');
+        if (titleMain) {
+          titleMain.textContent = pane.title && pane.title.trim() ? pane.title : '未命名 Pane';
+        }
+        if (titleSub) {
+          const windowLabel = pane.window ? `/${pane.window}` : '';
+          titleSub.textContent = `${pane.session}${windowLabel}`;
+        }
+
+        const sessionEl = card.querySelector('.pane-session');
+        if (sessionEl) {
+          sessionEl.textContent = `Session: ${pane.session}`;
+        }
+        const windowEl = card.querySelector('.pane-window');
+        if (windowEl) {
+          windowEl.textContent = `Window: ${pane.window || '—'}`;
+        }
+        const idEl = card.querySelector('.pane-id');
+        if (idEl) {
+          idEl.textContent = `Pane: ${pane.pane_id}`;
+        }
+        const sizeEl = card.querySelector('.pane-size');
+        if (sizeEl) {
+          if (pane.width && pane.height) {
+            sizeEl.textContent = `Size: ${pane.width}×${pane.height}`;
+            sizeEl.classList.remove('hidden');
+          } else {
+            sizeEl.textContent = '';
+            sizeEl.classList.add('hidden');
+          }
+        }
+        const metaEl = card.querySelector('.pane-meta-info');
+        if (metaEl) {
+          const existingIndicator = metaEl.querySelector('.active-indicator');
+          if (pane.is_active) {
+            if (!existingIndicator) {
+              const indicator = document.createElement('span');
+              indicator.className = 'active-indicator';
+              indicator.textContent = '● 活跃';
+              metaEl.appendChild(indicator);
+            } else {
+              existingIndicator.textContent = '● 活跃';
+              existingIndicator.classList.remove('hidden');
+            }
+          } else if (existingIndicator) {
+            existingIndicator.remove();
+          }
+        }
+
+        const logEl = card.querySelector('.pane-log');
+        const previous = logEl.textContent;
+        const newContent = (pane.lines || []).join('\n');
+        if (previous !== newContent) {
+          logEl.textContent = newContent;
+        }
+
+        const state = paneState.get(pane.pane_id) || { autoScroll: true, pinned: false };
+        paneState.set(pane.pane_id, state);
+        applyPanePinState(card, pane.pane_id);
+        updateScrollState(logEl, pane.pane_id, true);
+        const activity = paneActivityStore.get(pane.pane_id);
+        applyPaneStatus(card, activity);
+        applyPaneAiSummary(card, pane.pane_id);
+      }
+
+      function applyPanePinState(card, paneId) {
+        const isPinned = pinnedPanes.has(paneId);
+        card.classList.toggle('pane-card--pinned', isPinned);
+        card.style.order = isPinned ? -1 : 0;
+      }
+
+      function registerPaneListeners(card) {
+        const paneId = card.dataset.paneId;
+        const logEl = card.querySelector('.pane-log');
+        const textarea = card.querySelector('textarea');
+        const enterToggle = card.querySelector('.enter-toggle');
+        const jumpBottomBtn = card.querySelector('.jump-bottom');
+        const sendButton = card.querySelector('.send-command');
+        const sendEnterBtn = card.querySelector('.send-enter');
+        const clearBtn = card.querySelector('.send-clear');
+        const keyButtons = card.querySelectorAll('.send-key');
+        const pinBtn = card.querySelector('.toggle-pin');
+        const expandBtn = card.querySelector('.toggle-expand');
+        const aiSummaryBtn = card.querySelector('.pane-ai-summary-btn');
+        const aiSummaryBody = card.querySelector('[data-pane-ai-summary-body]');
+
+        paneState.set(paneId, paneState.get(paneId) || { autoScroll: true, pinned: pinnedPanes.has(paneId) });
+
+        logEl.addEventListener('scroll', () => {
+          updateScrollState(logEl, paneId, false);
+        });
+
+        jumpBottomBtn.addEventListener('click', () => {
+          const state = paneState.get(paneId) || { autoScroll: true };
+          state.autoScroll = true;
+          paneState.set(paneId, state);
+          scrollToBottom(logEl);
+          jumpBottomBtn.classList.remove('visible');
+        });
+
+        textarea.addEventListener('keydown', (event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+            event.preventDefault();
+            sendPaneInput(paneId, textarea.value, enterToggle.checked, textarea);
+          }
+        });
+
+        sendButton.addEventListener('click', () => {
+          sendPaneInput(paneId, textarea.value, enterToggle.checked, textarea);
+        });
+
+        sendEnterBtn.addEventListener('click', () => {
+          sendCommand(paneId, { enter: true }).catch(handleError);
+        });
+
+        clearBtn.addEventListener('click', () => {
+          textarea.value = '';
+          textarea.focus();
+        });
+
+        keyButtons.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            try {
+              const keys = JSON.parse(btn.dataset.keys);
+              sendCommand(paneId, { keys, enter: false }).catch(handleError);
+            } catch (err) {
+              console.error('Failed to parse keys', err);
+            }
+          });
+        });
+
+        pinBtn.addEventListener('click', () => {
+          if (pinnedPanes.has(paneId)) {
+            pinnedPanes.delete(paneId);
+          } else {
+            pinnedPanes.add(paneId);
+          }
+          localStorage.setItem(pinnedStorageKey, JSON.stringify(Array.from(pinnedPanes)));
+          applyPanePinState(card, paneId);
+        });
+
+        expandBtn.addEventListener('click', () => {
+          const expanded = card.dataset.expanded === 'true';
+          card.dataset.expanded = (!expanded).toString();
+          if (!expanded) {
+            scrollToBottom(logEl);
+          }
+        });
+
+        applyPanePinState(card, paneId);
+        scrollToBottom(logEl);
+        applyPaneAiSummary(card, paneId);
+
+        if (aiSummaryBtn && aiSummaryBody) {
+          aiSummaryBtn.dataset.paneId = paneId;
+          aiSummaryBtn.addEventListener('click', () => {
+            fetchPaneSummary(paneId, aiSummaryBody);
+          });
+        }
+      }
+
+      function updateScrollState(logEl, paneId, onRefresh) {
+        const state = paneState.get(paneId) || { autoScroll: true };
+        const nearBottom = isNearBottom(logEl);
+        if (!onRefresh) {
+          state.autoScroll = nearBottom;
+        }
+        const jumpButton = logEl.parentElement.querySelector('.jump-bottom');
+        if (state.autoScroll) {
+          jumpButton.classList.remove('visible');
+          if (onRefresh) {
+            scrollToBottom(logEl);
+          }
+        } else if (!nearBottom) {
+          jumpButton.classList.add('visible');
+        }
+        paneState.set(paneId, state);
+      }
+
+      function isNearBottom(el) {
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }
+
+      function scrollToBottom(el) {
+        el.scrollTop = el.scrollHeight;
+      }
+
+      async function fetchDashboardState() {
+        try {
+          const response = await fetch('/api/dashboard');
+          if (!response.ok) {
+            throw new Error('请求失败');
+          }
+          const data = await response.json();
+          projectStore = data.projects || [];
+          renderBoard(projectStore);
+          paneActivityStore = new Map(Object.entries(data.pane_activity || {}));
+          syncPaneGrid(data.panes || []);
+        } catch (err) {
+          console.error('刷新 dashboard 失败:', err);
+        }
+      }
+
+      function syncPaneGrid(panes) {
+        const seen = new Set();
+        for (const pane of panes) {
+          seen.add(pane.pane_id);
+          const card = ensurePaneCard(pane.pane_id);
+          updatePaneCard(card, pane);
+        }
+        const existing = Array.from(paneGrid.querySelectorAll('.pane-card'));
+        for (const card of existing) {
+          const paneId = card.dataset.paneId;
+          if (!seen.has(paneId)) {
+            paneGrid.removeChild(card);
+            paneState.delete(paneId);
+            pinnedPanes.delete(paneId);
+          }
+        }
+        filterPanes();
+      }
+
+      async function refreshPane(paneId) {
+        try {
+          const response = await fetch(`/api/panes/${encodeURIComponent(paneId)}/tail`);
+          if (!response.ok) {
+            throw new Error('拉取 pane 失败');
+          }
+          const data = await response.json();
+          if (data.activity) {
+            paneActivityStore.set(paneId, data.activity);
+          }
+          const card = ensurePaneCard(paneId);
+          updatePaneCard(card, data);
+        } catch (err) {
+          console.error('刷新 pane 失败', paneId, err);
+        }
+      }
+
+      async function sendPaneInput(paneId, text, enter, textarea) {
+        if (!text && !enter) {
+          return;
+        }
+        try {
+          await sendCommand(paneId, { text, enter });
+          if (textarea) {
+            textarea.value = '';
+          }
+          await refreshPane(paneId);
+        } catch (err) {
+          handleError(err);
+        }
+      }
+
+      async function sendCommand(paneId, options) {
+        const payload = {};
+        if (options.text !== undefined) {
+          payload.input = options.text;
+        }
+        if (options.enter !== undefined) {
+          payload.enter = options.enter;
+        }
+        if (options.keys) {
+          payload.keys = options.keys;
+        }
+        const response = await fetch(`/api/panes/${encodeURIComponent(paneId)}/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          const error = await response.text();
+          throw new Error(error || '发送失败');
+        }
+      }
+
+      function handleError(err) {
+        console.error(err);
+        alert(`操作失败: ${err.message}`);
+      }
+
+      function filterPanes() {
+        const keyword = paneFilterInput.value.trim().toLowerCase();
+        const cards = paneGrid.querySelectorAll('.pane-card');
+        cards.forEach((card) => {
+          const matchesFocus = !focusedPaneId || card.dataset.paneId === focusedPaneId;
+          const haystack = [
+            card.dataset.paneId,
+            card.dataset.session,
+            card.dataset.window,
+            card.dataset.title
+          ]
+            .join(' ')
+            .toLowerCase();
+          const matchesKeyword = !keyword || haystack.includes(keyword);
+          card.classList.toggle('hidden', !(matchesFocus && matchesKeyword));
+          card.classList.toggle('pane-card--focused', focusedPaneId === card.dataset.paneId);
+          applyPaneAiSummary(card, card.dataset.paneId);
+        });
+        renderBoard(projectStore);
+      }
+
+      function toggleFocusPane(paneId) {
+        const nextFocus = focusedPaneId === paneId ? null : paneId;
+        if (nextFocus && paneFilterInput.value.trim()) {
+          paneFilterInput.value = '';
+        }
+        focusedPaneId = nextFocus;
+        filterPanes();
+      }
+
+      async function fetchPaneSummary(paneId, summaryEl) {
+        if (!summaryEl) {
+          return;
+        }
+        summaryEl.classList.remove('error');
+        summaryEl.classList.add('loading');
+        summaryEl.textContent = 'AI 总结生成中...';
+        try {
+          const response = await fetch(`/api/panes/${encodeURIComponent(paneId)}/summary`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `HTTP ${response.status}`);
+          }
+          const data = await response.json();
+          const text = (data && data.summary) || '暂无总结结果';
+          paneSummaryCache.set(paneId, text);
+          summaryEl.classList.remove('loading');
+          summaryEl.textContent = text;
+          summaryEl.scrollTop = 0;
+          const card = paneGrid.querySelector(`[data-pane-id="${paneId}"]`);
+          if (card) {
+            applyPaneAiSummary(card, paneId);
+          }
+          renderBoard(projectStore);
+        } catch (err) {
+          console.error('Pane summary failed', err);
+          summaryEl.classList.remove('loading');
+          summaryEl.classList.add('error');
+          summaryEl.textContent = `总结失败: ${err.message}`;
+        }
+      }
+
+      refreshButton.addEventListener('click', () => {
+        fetchDashboardState();
+      });
+
+      toggleRefreshButton.addEventListener('click', () => {
+        autoRefreshEnabled = !autoRefreshEnabled;
+        toggleRefreshButton.textContent = autoRefreshEnabled ? '暂停自动刷新' : '恢复自动刷新';
+        scheduleRefresh();
+      });
+
+      layoutButton.addEventListener('click', cycleLayoutMode);
+      paneFilterInput.addEventListener('input', () => {
+        if (focusedPaneId) {
+          focusedPaneId = null;
+        }
+        filterPanes();
+      });
+
+      boardContainer.addEventListener('click', (event) => {
+        const summaryTarget = event.target.closest('[data-summary-pane]');
+        if (summaryTarget) {
+          event.preventDefault();
+          const paneId = summaryTarget.dataset.summaryPane;
+          const card = ensurePaneCard(paneId);
+          const summaryEl = card.querySelector('[data-pane-ai-summary-body]');
+          fetchPaneSummary(paneId, summaryEl);
+          return;
+        }
+        const focusTarget = event.target.closest('[data-focus-pane]');
+        if (!focusTarget) {
+          return;
+        }
+        event.preventDefault();
+        toggleFocusPane(focusTarget.dataset.focusPane);
+      });
+
+      window.addEventListener('focus', () => {
+        if (autoRefreshEnabled) {
+          fetchDashboardState();
+        }
+      });
+
+      function bootstrap() {
+        const bootstrapData = window.dashboardBootstrap || {};
+        paneGrid.querySelectorAll('.pane-card').forEach((card) => {
+          registerPaneListeners(card);
+          const paneId = card.dataset.paneId;
+          const state = paneState.get(paneId) || { autoScroll: true, pinned: pinnedPanes.has(paneId) };
+          paneState.set(paneId, state);
+          applyPanePinState(card, paneId);
+          applyPaneStatus(card, paneActivityStore.get(paneId));
+          applyPaneAiSummary(card, paneId);
+        });
+        projectStore = bootstrapData.projects || [];
+        renderBoard(projectStore || []);
+        paneActivityStore = new Map(Object.entries(bootstrapData.pane_activity || {}));
+        syncPaneGrid(bootstrapData.panes || []);
+        scheduleRefresh();
+      }
+
+      bootstrap();
+    </script>
   </body>
 </html>

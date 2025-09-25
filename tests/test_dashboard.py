@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from tmux_agent.dashboard.app import create_app
 from tmux_agent.dashboard.config import DashboardConfig
+from tmux_agent.dashboard.summary import SummaryResult
 from tmux_agent.state import StageState
 from tmux_agent.state import StageStatus
 from tmux_agent.state import StateStore
@@ -46,8 +47,8 @@ def _install_fake_tmux(monkeypatch, adapter: FakeTmuxAdapter) -> None:
 
 def _make_fake_adapter() -> FakeTmuxAdapter:
     adapter = FakeTmuxAdapter({"%1": "hello\n", "%2": "other\n"})
-    adapter.set_meta("%1", "sess1", "win1", "title1")
-    adapter.set_meta("%2", "sess2", "win2", "title2")
+    adapter.set_full_meta("%1", session="sess1", window="win1", title="title1", active=True, width=120, height=32)
+    adapter.set_full_meta("%2", session="sess2", window="win2", title="title2", active=False, width=100, height=28)
     return adapter
 
 
@@ -77,8 +78,9 @@ def test_index_page_renders_state(tmp_path, monkeypatch):
 
     response = client.get("/")
     assert response.status_code == 200
-    assert "demo" in response.text
-    assert "WAITING_APPROVAL" in response.text
+    assert "调度控制板" in response.text
+    assert "实时 Pane" in response.text
+    assert "%1" in response.text
 
 
 def test_api_allows_submitting_decision(tmp_path, monkeypatch):
@@ -118,6 +120,13 @@ def test_panes_api_and_send(tmp_path, monkeypatch):
     assert list_response.status_code == 200
     panes = list_response.json()
     assert any(pane["pane_id"] == "%1" for pane in panes)
+    first = next(item for item in panes if item["pane_id"] == "%1")
+    assert first["is_active"] is True
+    assert first["width"] == 120
+    assert first["activity"]["status"] in {"RUNNING", "IDLE"}
+    assert first["activity"]["project"] == "others"
+    assert "tail_excerpt" in first
+    assert "hello" in first["tail_excerpt"]
 
     send_resp = client.post(
         "/api/panes/%1/send",
@@ -127,17 +136,81 @@ def test_panes_api_and_send(tmp_path, monkeypatch):
     # Fake adapter appends marker to pane output
     assert "[SENT:echo hi\n]" in fake._panes["%1"]
 
+    send_keys_resp = client.post(
+        "/api/panes/%1/send",
+        json={"keys": ["C-c"], "enter": False},
+    )
+    assert send_keys_resp.status_code == 200
+    assert "[SENT:C-c]" in fake._panes["%1"]
+
+    enter_only_resp = client.post(
+        "/api/panes/%1/send",
+        json={"enter": True},
+    )
+    assert enter_only_resp.status_code == 200
+    assert "[SENT:\n]" in fake._panes["%1"]
+
     tail_resp = client.get("/api/panes/%1/tail")
     assert tail_resp.status_code == 200
-    assert any("echo hi" in line for line in tail_resp.json()["lines"])
+    tail_payload = tail_resp.json()
+    assert tail_payload["session"] == "sess1"
+    assert any("echo hi" in line for line in tail_payload["lines"])
+    assert tail_payload["activity"]["status"] in {"RUNNING", "IDLE"}
+    assert tail_payload["activity"]["project"] == "others"
+    assert "tail_excerpt" in tail_payload
+    assert "[SENT:" in tail_payload["tail_excerpt"]
 
 
-def test_panes_page_renders(tmp_path, monkeypatch):
+def test_dashboard_api_includes_stage_and_panes(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    _seed_state(db_path)
     fake = _make_fake_adapter()
     _install_fake_tmux(monkeypatch, fake)
-    app = create_app(DashboardConfig(db_path=tmp_path / "state.db"))
+    app = create_app(DashboardConfig(db_path=db_path))
     client = TestClient(app)
 
-    response = client.get("/panes")
+    response = client.get("/api/dashboard")
     assert response.status_code == 200
-    assert "form" in response.text
+    payload = response.json()
+    assert "board" in payload
+    assert payload["board"]
+    assert "projects" in payload
+    assert payload["projects"]
+    first_pane = next(item for item in payload["panes"] if item["pane_id"] == "%1")
+    assert first_pane["lines"]
+    assert first_pane["is_active"] is True
+    pane_activity = payload["pane_activity"]
+    assert pane_activity["%1"]["status"] in {"RUNNING", "IDLE"}
+    assert pane_activity["%1"]["project"] == "others"
+    assert "tail_excerpt" in pane_activity["%1"]
+
+
+def test_pane_summary_endpoint(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    _seed_state(db_path)
+    fake = _make_fake_adapter()
+
+    class StubSummarizer:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.default_model = "claude-sonnet-4-20250514"
+
+        def summarize(self, provider, pane_id: str, *, options=None) -> SummaryResult:
+            return SummaryResult(
+                pane_id=pane_id,
+                summary="summarized",
+                model="claude-sonnet-4-20250514",
+                duration_ms=123,
+                cost_usd=0.01,
+                raw={"mock": True},
+            )
+
+    monkeypatch.setattr("tmux_agent.dashboard.app.PaneSummarizer", lambda *args, **kwargs: StubSummarizer())
+    _install_fake_tmux(monkeypatch, fake)
+    app = create_app(DashboardConfig(db_path=db_path))
+    client = TestClient(app)
+
+    response = client.post("/api/panes/%1/summary")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["summary"] == "summarized"
+    assert data["pane_id"] == "%1"

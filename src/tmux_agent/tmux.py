@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Iterable
 from typing import Optional
+from typing import Sequence
 
 from .config import SSHConfig
 
@@ -16,6 +17,9 @@ class PaneInfo:
     session_name: str
     window_name: str
     pane_title: str
+    is_active: bool = False
+    width: int | None = None
+    height: int | None = None
 
     def matches_patterns(self, patterns: Iterable[str]) -> bool:
         if not patterns:
@@ -84,20 +88,34 @@ class TmuxAdapter:
                 "list-panes",
                 "-a",
                 "-F",
-                "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_title}",
+                "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_title}\t#{?pane_active,1,0}\t#{pane_width}\t#{pane_height}",
             ]
         )
         panes: list[PaneInfo] = []
         for line in proc.stdout.strip().splitlines():
             if not line:
                 continue
-            pane_id, session_name, window_name, pane_title = line.split("\t")
+            parts = line.split("\t", 6)
+            if len(parts) < 7:
+                parts += [""] * (7 - len(parts))
+            (
+                pane_id,
+                session_name,
+                window_name,
+                pane_title,
+                active_flag,
+                pane_width,
+                pane_height,
+            ) = parts
             panes.append(
                 PaneInfo(
                     pane_id=pane_id,
                     session_name=session_name,
                     window_name=window_name,
                     pane_title=pane_title,
+                    is_active=active_flag == "1",
+                    width=int(pane_width) if pane_width else None,
+                    height=int(pane_height) if pane_height else None,
                 )
             )
         return panes
@@ -115,10 +133,26 @@ class TmuxAdapter:
         )
         return CaptureResult(pane_id=pane_id, content=proc.stdout)
 
-    def send_keys(self, pane_id: str, keys: str, enter: bool = True) -> None:
+    def send_keys(self, pane_id: str, keys: str | Sequence[str], enter: bool = True) -> None:
+        if isinstance(keys, str):
+            chunks = keys.split("\n")
+            for idx, chunk in enumerate(chunks):
+                args = ["send-keys", "-t", pane_id]
+                if chunk:
+                    args.append(chunk)
+                # send newline between chunks, but avoid double-appending final enter for empty strings
+                is_last_chunk = idx == len(chunks) - 1
+                if not is_last_chunk:
+                    args.append("C-m")
+                elif enter:
+                    args.append("C-m")
+                self._run(args)
+            if not chunks and enter:
+                self._run(["send-keys", "-t", pane_id, "C-m"])
+            return
+
         args = ["send-keys", "-t", pane_id]
-        if keys:
-            args.append(keys)
+        args.extend(keys)
         if enter:
             args.append("C-m")
         self._run(args)
@@ -130,25 +164,41 @@ class FakeTmuxAdapter(TmuxAdapter):
     def __init__(self, panes: dict[str, str] | None = None):
         super().__init__(tmux_bin="tmux")
         self._panes: dict[str, str] = panes or {}
-        self._pane_meta: dict[str, tuple[str, str, str]] = {}
+        self._pane_meta: dict[str, tuple[str, str, str, bool, int | None, int | None]] = {}
         for idx, pane in enumerate(self._panes):
-            self._pane_meta[pane] = ("sess", f"window{idx}", f"pane{idx}")
+            self._pane_meta[pane] = ("sess", f"window{idx}", f"pane{idx}", False, None, None)
 
     def set_meta(self, pane_id: str, session: str, window: str, title: str) -> None:
-        self._pane_meta[pane_id] = (session, window, title)
+        self._pane_meta[pane_id] = (session, window, title, False, None, None)
+
+    def set_full_meta(
+        self,
+        pane_id: str,
+        *,
+        session: str,
+        window: str,
+        title: str,
+        active: bool = False,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> None:
+        self._pane_meta[pane_id] = (session, window, title, active, width, height)
 
     def append_output(self, pane_id: str, text: str) -> None:
         self._panes[pane_id] = self._panes.get(pane_id, "") + text
 
     def list_panes(self) -> list[PaneInfo]:
         panes = []
-        for pane_id, (session, window, title) in self._pane_meta.items():
+        for pane_id, (session, window, title, active, width, height) in self._pane_meta.items():
             panes.append(
                 PaneInfo(
                     pane_id=pane_id,
                     session_name=session,
                     window_name=window,
                     pane_title=title,
+                    is_active=active,
+                    width=width,
+                    height=height,
                 )
             )
         return panes
@@ -156,6 +206,10 @@ class FakeTmuxAdapter(TmuxAdapter):
     def capture_pane(self, pane_id: str, capture_lines: int = 2000) -> CaptureResult:
         return CaptureResult(pane_id=pane_id, content=self._panes.get(pane_id, ""))
 
-    def send_keys(self, pane_id: str, keys: str, enter: bool = True) -> None:
-        suffix = keys + ("\n" if enter else "")
+    def send_keys(self, pane_id: str, keys: str | Sequence[str], enter: bool = True) -> None:
+        if isinstance(keys, str):
+            suffix = keys
+        else:
+            suffix = "|".join(keys)
+        suffix += "\n" if enter else ""
         self.append_output(pane_id, f"[SENT:{suffix}]")
