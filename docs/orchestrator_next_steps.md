@@ -52,9 +52,11 @@
   - 8787 页面增加“等待确认”“阻塞任务”板块；支持从手机提交 `/approve`、自定义指令。
 
 ### 阶段 4：多 pane 协作与任务板（进行中）
-- **进度**：已支持 `depends_on` 阻塞判断、`pending_confirmation` 元数据、审计日志 JSONL。
+- **进度**：
+  - 移动门户新增 “Orchestrator 概览” 网格，展示 phase、阻塞、待确认、最新命令与心跳。
+  - 支持 `depends_on` 阻塞判断，所有 pending/prompt/动作写入 `.tmuxagent/logs/orchestrator-actions.jsonl`。
 - **待办**：
-  - 在 8702 仪表盘建立 “Orchestrator” 专栏，展示 phase、summary、阻塞、历史命令。
+  - 在 8702 仪表盘建立 “Orchestrator” 专栏，展示阶段、摘要、历史命令及依赖图。
   - 完善 orchestrator 级别的任务编排（链式阶段、责任人映射）。
   - 加入锁/队列避免同一 pane 并发执行。
 
