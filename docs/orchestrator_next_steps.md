@@ -20,7 +20,7 @@
 
 ## 分阶段方案
 
-### 阶段 1：Orchestrator 守护与上下文增强
+### 阶段 1：Orchestrator 守护与上下文增强 ✔️ 完成
 - **服务守护**
   - 使用 systemd/supervisor 或在 Runner 中引入子进程管理，确保 orchestrator crash 后自动重启。
   - 增加心跳（写入 `metadata.orchestrator_heartbeat`），供仪表盘和告警检查。
@@ -31,7 +31,7 @@
 - **命令执行反馈**
   - 在 Runner 捕获命令执行的返回/错误并写入 metadata；orchestrator 根据反馈决定重试或转人工。
 
-### 阶段 2：决策策略与安全控制
+### 阶段 2：决策策略与安全控制 ✔️ 初版落地
 - **阶段状态机**
   - 在 metadata 中维护 phase（PLANNING/EXECUTING/VERIFYING/BLOCKED/DONE）；不同 phase 选用不同 prompt & 行为策略。
   - 引入 `blockers` 字段，记录阻塞原因与重试次数；持续阻塞时强制提醒。
@@ -41,7 +41,7 @@
 - **模板体系**
   - 维护多套 prompt（planning/execution/testing/summary）。在 orchestrator 配置中映射 phase→prompt。
 
-### 阶段 3：通知与双向交互
+### 阶段 3：通知与双向交互 ✔️ 初版落地
 - **统一通知入口**
   - 在 `Notifier`/`notify_bridge` 前增加过滤器：只有 orchestrator 标记 `requires_confirmation` 或设置危急级别的事件推送到微信。
   - Runner/policy 常规通知改入日志或 8787 门户提示。
@@ -51,17 +51,14 @@
 - **门户升级**
   - 8787 页面增加“等待确认”“阻塞任务”板块；支持从手机提交 `/approve`、自定义指令。
 
-### 阶段 4：多 pane 协作与任务板
-- **任务依赖图**
-  - metadata 中记录 `depends_on`，orchestrator 在上游未完成时仅汇总状态，不执行命令。
-  - 实现 orchestrator 级别的计划：如 orchestrator → CI pane → Deploy pane 的链式动作。
-- **仪表盘增强**
-  - 在 8702 仪表盘增加 “Orchestrator” 页，展示 phase、summary、阻塞等信息；支持时间线、历史命令追踪。
-  - 建立审计日志：记录 orchestrator 每次注入的指令、确认情况。
-- **冲突管理**
-  - 加入锁/队列，避免多个决策在同一 pane 并发执行。
+### 阶段 4：多 pane 协作与任务板（进行中）
+- **进度**：已支持 `depends_on` 阻塞判断、`pending_confirmation` 元数据、审计日志 JSONL。
+- **待办**：
+  - 在 8702 仪表盘建立 “Orchestrator” 专栏，展示 phase、summary、阻塞、历史命令。
+  - 完善 orchestrator 级别的任务编排（链式阶段、责任人映射）。
+  - 加入锁/队列避免同一 pane 并发执行。
 
-### 阶段 5：可靠性与可观测性
+### 阶段 5：可靠性与可观测性（待启动）
 - **监控指标**
   - 输出 Prometheus/Grafana 指标：命令数量、失败率、冷却次数、待确认数量等。
   - 异常（如 codex 失败、长时间无心跳）触发高优先级告警。
