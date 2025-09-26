@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 from typing import Iterable
+from typing import Mapping
 from typing import Sequence
 
 import httpx
@@ -17,6 +18,7 @@ from .local_bus import LocalBus
 class NotificationMessage:
     title: str
     body: str
+    meta: Mapping[str, Any] | None = None
 
 
 class Notifier:
@@ -60,6 +62,8 @@ class Notifier:
             "body": message.body,
             "source": "notifier",
         }
+        if message.meta:
+            payload["meta"] = dict(message.meta)
         self.bus.append_notification(payload)
 
     def _send_serverchan(self, message: NotificationMessage) -> None:

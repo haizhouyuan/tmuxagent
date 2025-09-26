@@ -30,6 +30,13 @@ class CommandPayload(BaseModel):
     sender: str | None = None
 
 
+class ConfirmationPayload(BaseModel):
+    branch: str
+    action: str
+    command: str | None = None
+    meta: dict[str, Any] | None = None
+
+
 def _load_state_store(path: Path) -> StateStore:
     store = StateStore(path)
     return store
@@ -172,6 +179,10 @@ function renderSessionDetail(sessionName) {
   const metadata = typeof info.metadata === 'object' && info.metadata ? info.metadata : {};
   const orchestratorSummary = metadata.orchestrator_summary ? escapeHtml(String(metadata.orchestrator_summary)) : '';
   const orchestratorError = metadata.orchestrator_error ? escapeHtml(String(metadata.orchestrator_error)) : '';
+  const phase = escapeHtml(String(metadata.phase || '未定义'));
+  const blockers = Array.isArray(metadata.blockers) && metadata.blockers.length
+    ? escapeHtml(metadata.blockers.join('\n'))
+    : '';
   const metadataDump = escapeHtml(JSON.stringify(metadata, null, 2));
   const body = info.last_output ? `<pre>${escapeHtml(info.last_output)}</pre>` : '<div>暂无输出</div>';
   const logLine = logPath ? `<div>日志：${logPath}</div>` : '';
@@ -186,10 +197,12 @@ function renderSessionDetail(sessionName) {
       <div>模型：${model}</div>
       <div>模板：${template}</div>
       <div>状态：${status}</div>
+      <div>阶段：${phase}</div>
       ${promptLine}
       ${logLine}
       ${summaryLine}
       ${errorLine}
+      ${blockers ? `<div>⚠️ 阻塞：<pre>${blockers}</pre></div>` : ''}
       <details><summary>元数据</summary><pre>${metadataDump}</pre></details>
       ${body}
     </article>
@@ -375,6 +388,20 @@ setInterval(fetchSessions, 8000);
         record.setdefault("sender", "mobile")
         bus.append_command(record)
         return JSONResponse({"status": "ok"})
+
+    @app.post("/api/confirmations")
+    async def api_confirmations(
+        payload: ConfirmationPayload,
+        _: None = Depends(require_token),
+    ) -> JSONResponse:
+        record = {
+            "branch": payload.branch,
+            "action": payload.action,
+            "command": payload.command,
+            "meta": payload.meta or {},
+        }
+        bus.append_confirmation(record)
+        return JSONResponse({"status": "queued"})
 
     return app
 

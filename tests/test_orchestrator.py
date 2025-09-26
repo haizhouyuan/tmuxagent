@@ -94,9 +94,7 @@ def test_orchestrator_injects_commands(tmp_path):
         service.run_once()
 
         commands = _read_jsonl(bus.commands_path)
-        assert commands, "command should be appended to bus"
-        assert commands[0]["text"] == "echo hello"
-        assert commands[0]["session"] == "agent-storyapp-feature-x"
+        assert commands == [], "commands should wait for manual confirmation"
 
         session = store.get_agent_session("storyapp/feature-x")
         assert session is not None
@@ -107,11 +105,13 @@ def test_orchestrator_injects_commands(tmp_path):
         assert metadata.get("orchestrator_last_command") == ["echo hello", "echo skip"]
         assert "orchestrator_heartbeat" in metadata
         assert metadata.get("history_summaries") == ["ok"]
-        assert metadata.get("pending_confirmation") == ["echo hello"]
+        pending = metadata.get("pending_confirmation")
+        assert isinstance(pending, list) and len(pending) == 2
 
         notifications = _read_jsonl(bus.notifications_path)
         assert notifications, "notification should be written"
         assert notifications[-1]["body"] == "please confirm"
+        assert notifications[-1].get("meta", {}).get("requires_attention") is True
 
         codex._decisions = [
             OrchestratorDecision(
@@ -123,14 +123,27 @@ def test_orchestrator_injects_commands(tmp_path):
                 commands=(CommandSuggestion(text="echo second"),),
             )
         ]
+
+        bus.append_confirmation({"branch": "storyapp/feature-x", "action": "approve"})
         service.run_once()
         commands_after = _read_jsonl(bus.commands_path)
-        assert len(commands_after) == len(commands), "no new command during cooldown"
+        assert len(commands_after) == 2
+        assert commands_after[0]["text"] == "echo hello"
+        assert commands_after[1]["text"] == "echo skip"
+
+        session = store.get_agent_session("storyapp/feature-x")
+        metadata = session["metadata"]
+        assert metadata.get("pending_confirmation") == []
+        assert metadata.get("phase") == "executing"
 
         service._last_command_at["storyapp/feature-x"] = time.time() - 3600
         service.run_once()
         commands_final = _read_jsonl(bus.commands_path)
         assert commands_final[-1]["text"] == "echo second"
+
+        session = store.get_agent_session("storyapp/feature-x")
+        metadata = session["metadata"]
+        assert metadata.get("phase") == "verifying"
     finally:
         service.agent_service.close()
         store.close()

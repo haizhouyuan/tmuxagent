@@ -38,7 +38,8 @@ class LocalBus:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.notifications_path = self.base_dir / "notifications.jsonl"
         self.commands_path = self.base_dir / "commands.jsonl"
-        for path in (self.notifications_path, self.commands_path):
+        self.confirmations_path = self.base_dir / "confirmations.jsonl"
+        for path in (self.notifications_path, self.commands_path, self.confirmations_path):
             if not path.exists():
                 path.touch()
         self._write_lock = threading.Lock()
@@ -107,6 +108,30 @@ class LocalBus:
             new_offset = handle.tell()
         return commands, new_offset
 
+    # Confirmation helpers ----------------------------------------------
+    def append_confirmation(self, payload: dict[str, Any]) -> None:
+        payload.setdefault("ts", time.time())
+        payload.setdefault("id", self._default_id(prefix="r"))
+        self._append_jsonl(self.confirmations_path, payload)
+
+    def read_confirmations(self, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+        size = os.path.getsize(self.confirmations_path)
+        if offset > size:
+            offset = 0
+        confirmations: list[dict[str, Any]] = []
+        with self.confirmations_path.open("r", encoding="utf-8") as handle:
+            handle.seek(offset)
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    confirmations.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            new_offset = handle.tell()
+        return confirmations, new_offset
+
     # Internal utilities ----------------------------------------------------
     def _append_jsonl(self, path: Path, payload: dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False)
@@ -139,4 +164,3 @@ class LocalBus:
 
     def _default_id(self, prefix: str) -> str:
         return f"{prefix}-{int(time.time() * 1000)}"
-
