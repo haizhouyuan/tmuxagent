@@ -64,6 +64,9 @@ class OrchestratorService:
         }
         self._last_command_at: dict[str, float] = {}
         self._confirmations_offset = "confirmations:orchestrator"
+        audit_dir = self.agent_service.config.repo_root / ".tmuxagent" / "logs"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        self._audit_log_path = audit_dir / "orchestrator-actions.jsonl"
 
     def run_forever(self) -> None:  # pragma: no cover - integration flow
         interval = self.config.poll_interval
@@ -83,7 +86,7 @@ class OrchestratorService:
             self._update_heartbeat(snapshot, now_ts)
             self._maybe_rotate_log(snapshot.record.log_path)
             self._maybe_generate_summary(snapshot)
-            if not self._should_process(snapshot.branch):
+            if not self._should_process(snapshot):
                 continue
             prompt = self._render_prompt(snapshot)
             try:
@@ -263,6 +266,12 @@ class OrchestratorService:
         self.bus.append_command(payload)
         if branch:
             self._last_command_at[branch] = time.time()
+            self._log_action({
+                "ts": time.time(),
+                "branch": branch,
+                "event": "command",
+                "payload": payload,
+            })
 
     def _record_pending_confirmation(self, branch: str, payload: dict[str, Any]) -> None:
         session = self.state_store.get_agent_session(branch)
@@ -275,6 +284,14 @@ class OrchestratorService:
         else:
             updated = [payload]
         self.agent_service.update_status(branch, metadata={"pending_confirmation": updated})
+        self._log_action(
+            {
+                "ts": time.time(),
+                "branch": branch,
+                "event": "pending_confirmation",
+                "payload": payload,
+            }
+        )
 
     def _record_error(self, snapshot: AgentSnapshot, message: str) -> None:
         self.agent_service.update_status(
@@ -335,6 +352,16 @@ class OrchestratorService:
                 updates["confirmation_responses"] = [response_meta]
         if executed:
             self.agent_service.update_status(branch, metadata=updates)
+            self._log_action(
+                {
+                    "ts": time.time(),
+                    "branch": branch,
+                    "event": "confirmation",
+                    "status": "approved",
+                    "command": command_text,
+                    "meta": response_meta,
+                }
+            )
 
     def _deny_pending(self, branch: str, command_text: str | None, response_meta: dict[str, Any]) -> None:
         session = self.state_store.get_agent_session(branch)
@@ -362,12 +389,51 @@ class OrchestratorService:
             else:
                 updates["confirmation_responses"] = [response_meta]
         self.agent_service.update_status(branch, metadata=updates)
+        self._log_action(
+            {
+                "ts": time.time(),
+                "branch": branch,
+                "event": "confirmation",
+                "status": "denied",
+                "command": command_text,
+                "meta": response_meta,
+            }
+        )
 
-    def _should_process(self, branch: str) -> bool:
+    def _is_phase_completed(self, branch: str) -> bool:
+        session = self.state_store.get_agent_session(branch)
+        if not session:
+            return False
+        metadata = session.get("metadata") or {}
+        return metadata.get("phase") == self.config.completion_phase
+
+    def _log_action(self, entry: dict[str, Any]) -> None:
+        try:
+            with self._audit_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False))
+                handle.write("\n")
+        except OSError:
+            logger.debug("Failed to write orchestrator audit entry")
+
+    def _should_process(self, snapshot: AgentSnapshot) -> bool:
+        branch = snapshot.branch
         last = self._last_command_at.get(branch)
         if last is None:
-            return True
-        return (time.time() - last) >= self.config.cooldown_seconds
+            cooldown_ok = True
+        else:
+            cooldown_ok = (time.time() - last) >= self.config.cooldown_seconds
+
+        deps = snapshot.metadata.get("depends_on")
+        if isinstance(deps, list) and deps:
+            missing = [dep for dep in deps if not self._is_phase_completed(dep)]
+            if missing:
+                if snapshot.metadata.get("blockers") != missing:
+                    self.agent_service.update_status(branch, metadata={"blockers": missing})
+                return False
+            if snapshot.metadata.get("blockers"):
+                self.agent_service.update_status(branch, metadata={"blockers": []})
+
+        return cooldown_ok
 
 
 __all__ = ["OrchestratorService", "AgentSnapshot"]

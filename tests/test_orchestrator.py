@@ -147,3 +147,117 @@ def test_orchestrator_injects_commands(tmp_path):
     finally:
         service.agent_service.close()
         store.close()
+
+
+def test_orchestrator_respects_dependencies(tmp_path):
+    log_path = tmp_path / "logs" / "dep.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("dep line\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    base_branch = "storyapp/base"
+    _append_agent(store, base_branch, "agent-storyapp-base", log_path)
+    store.upsert_agent_session(
+        branch=base_branch,
+        worktree_path=str(log_path.parent),
+        session_name="agent-storyapp-base",
+        model="gpt-5-codex",
+        template="orchestrator",
+        description="base",
+        last_prompt="",
+        status="idle",
+        log_path=str(log_path),
+        metadata={"phase": "planning"},
+    )
+
+    target_log = tmp_path / "logs" / "target.log"
+    target_log.write_text("target line\n", encoding="utf-8")
+    _append_agent(store, "storyapp/feature-y", "agent-storyapp-feature-y", target_log)
+    store.upsert_agent_session(
+        branch="storyapp/feature-y",
+        worktree_path=str(target_log.parent),
+        session_name="agent-storyapp-feature-y",
+        model="gpt-5-codex",
+        template="orchestrator",
+        description="y",
+        last_prompt="",
+        status="idle",
+        log_path=str(target_log),
+        metadata={"depends_on": [base_branch]},
+    )
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=10.0,
+        max_commands_per_cycle=2,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        phase_prompts={},
+        default_phase="planning",
+        completion_phase="done",
+        codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
+        notify_only_on_confirmation=True,
+    )
+
+    decisions = [
+        OrchestratorDecision(
+            summary="base ok",
+            notify=None,
+            requires_confirmation=False,
+            phase="planning",
+            blockers=(),
+            commands=(),
+        ),
+        OrchestratorDecision(
+            summary="wait",
+            notify=None,
+            requires_confirmation=False,
+            phase="executing",
+            blockers=(),
+            commands=(CommandSuggestion(text="echo dependent"),),
+        ),
+    ]
+
+    codex = FakeCodexClient(decisions)
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=codex,
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        commands = _read_jsonl(bus.commands_path)
+        assert commands == []
+
+        session = store.get_agent_session("storyapp/feature-y")
+        assert session["metadata"].get("blockers") == [base_branch]
+
+        store.upsert_agent_session(
+            branch=base_branch,
+            worktree_path=str(log_path.parent),
+            session_name="agent-storyapp-base",
+            model="gpt-5-codex",
+            template="orchestrator",
+            description="base",
+            last_prompt="",
+            status="idle",
+            log_path=str(log_path),
+            metadata={"phase": "done"},
+        )
+
+        service.run_once()
+        commands_after = _read_jsonl(bus.commands_path)
+        assert commands_after[-1]["text"] == "echo dependent"
+    finally:
+        service.agent_service.close()
+        store.close()

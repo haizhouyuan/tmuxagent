@@ -56,6 +56,7 @@ class OrchestratorConfig(BaseModel):
     prompts: PromptConfig = Field(default_factory=PromptConfig)
     phase_prompts: dict[str, Path] = Field(default_factory=dict)
     default_phase: str = "planning"
+    completion_phase: str = "done"
     codex: CodexConfig = Field(default_factory=CodexConfig)
     notify_only_on_confirmation: bool = True
 
