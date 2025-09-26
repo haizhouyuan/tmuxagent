@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 from typing import Iterable
 from typing import Optional
+from uuid import uuid4
 
+from .. import metrics
 from ..agents.service import AgentRecord
 from ..agents.service import AgentService
 from ..local_bus import LocalBus
@@ -19,6 +21,7 @@ from ..state import StateStore
 from .codex_client import CodexClient
 from .codex_client import OrchestratorDecision
 from .config import OrchestratorConfig
+from .config import TaskSpec
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +66,11 @@ class OrchestratorService:
             if path.exists()
         }
         self._last_command_at: dict[str, float] = {}
+        self._session_busy_until: dict[str, float] = {}
+        self._session_queue: dict[str, list[dict[str, Any]]] = {}
+        self._pending_by_branch: dict[str, list[dict[str, Any]]] = {}
+        self._task_plan: dict[str, TaskSpec] = {task.branch: task for task in config.tasks}
+        self._metrics_started = False
         self._confirmations_offset = "confirmations:orchestrator"
         audit_dir = self.agent_service.config.repo_root / ".tmuxagent" / "logs"
         audit_dir.mkdir(parents=True, exist_ok=True)
@@ -70,6 +78,7 @@ class OrchestratorService:
 
     def run_forever(self) -> None:  # pragma: no cover - integration flow
         interval = self.config.poll_interval
+        self._maybe_start_metrics()
         logger.info("Starting orchestrator loop (interval %.1fs)", interval)
         try:
             while True:
@@ -79,6 +88,7 @@ class OrchestratorService:
             logger.info("Orchestrator interrupted, exiting")
 
     def run_once(self) -> None:
+        self._flush_queued_commands()
         self._process_confirmations()
         snapshots = self._collect_snapshots()
         now_ts = int(time.time())
@@ -89,13 +99,32 @@ class OrchestratorService:
             if not self._should_process(snapshot):
                 continue
             prompt = self._render_prompt(snapshot)
+            start_time = time.perf_counter()
             try:
                 decision = self.codex.run(prompt)
             except Exception as exc:
                 logger.error("Codex execution failed for %s: %s", snapshot.branch, exc)
                 self._record_error(snapshot, str(exc))
                 continue
+            metrics.observe_decision_latency(time.perf_counter() - start_time)
             self._handle_decision(snapshot, decision)
+        self._flush_queued_commands()
+
+    def _maybe_start_metrics(self) -> None:
+        if self._metrics_started:
+            return
+        if self.config.metrics_port:
+            try:
+                metrics.start_server(self.config.metrics_port, self.config.metrics_host)
+                logger.info(
+                    "Started Prometheus exporter on %s:%s",
+                    self.config.metrics_host,
+                    self.config.metrics_port,
+                )
+            except Exception as exc:  # pragma: no cover - exporter failure should not kill service
+                logger.warning("Failed to start metrics exporter: %s", exc)
+            else:
+                self._metrics_started = True
 
     def _collect_snapshots(self) -> list[AgentSnapshot]:
         records = self.agent_service.list_agents()
@@ -103,6 +132,10 @@ class OrchestratorService:
         for record in records:
             log_excerpt = self._read_log_tail(record.log_path)
             metadata = dict(record.metadata or {})
+            metadata = self._apply_task_plan(record, metadata)
+            queued = self._pending_by_branch.get(record.branch)
+            if queued:
+                metadata["queued_commands"] = [dict(item) for item in queued]
             snapshots.append(AgentSnapshot(record=record, log_excerpt=log_excerpt, metadata=metadata))
         return snapshots
 
@@ -161,6 +194,49 @@ class OrchestratorService:
             metadata={"history_summaries": history},
         )
 
+    def _apply_task_plan(self, record: AgentRecord, metadata: dict[str, Any]) -> dict[str, Any]:
+        plan = self._task_plan.get(record.branch)
+        if not plan:
+            return metadata
+        updates: dict[str, Any] = {}
+
+        if plan.depends_on:
+            existing = metadata.get("depends_on")
+            if isinstance(existing, list):
+                merged = [dep for dep in existing if isinstance(dep, str)]
+            else:
+                merged = []
+            for dep in plan.depends_on:
+                if dep not in merged:
+                    merged.append(dep)
+            if merged and merged != existing:
+                updates["depends_on"] = merged
+
+        if plan.responsible and metadata.get("responsible") != plan.responsible:
+            updates["responsible"] = plan.responsible
+
+        if plan.phases:
+            current_plan = metadata.get("phase_plan")
+            if current_plan != plan.phases:
+                updates["phase_plan"] = list(plan.phases)
+
+        if plan.title and metadata.get("orchestrator_task") != plan.title:
+            updates["orchestrator_task"] = plan.title
+
+        if plan.tags:
+            existing_tags = metadata.get("tags")
+            tag_set = {tag for tag in plan.tags}
+            if isinstance(existing_tags, list):
+                tag_set.update(str(tag) for tag in existing_tags)
+            merged_tags = sorted(tag_set)
+            if merged_tags and merged_tags != existing_tags:
+                updates["tags"] = merged_tags
+
+        if updates:
+            self.agent_service.update_status(record.branch, metadata=updates)
+            metadata.update(updates)
+        return metadata
+
     def _render_prompt(self, snapshot: AgentSnapshot) -> str:
         current_phase = str(snapshot.metadata.get("phase") or self.config.default_phase)
         prompt_path = self._phase_prompts.get(current_phase, self.config.prompts.command)
@@ -186,29 +262,59 @@ class OrchestratorService:
 
     def _handle_decision(self, snapshot: AgentSnapshot, decision: OrchestratorDecision) -> None:
         logger.debug("Decision for %s: %s", snapshot.branch, decision)
+        phase_history_updates: list[str] | None = None
+        if decision.phase:
+            existing_history = snapshot.metadata.get("phase_history")
+            if isinstance(existing_history, list):
+                history_items = [str(item) for item in existing_history if isinstance(item, str)]
+            else:
+                history_items = []
+            if not history_items or history_items[-1] != decision.phase:
+                history_items.append(decision.phase)
+                phase_history_updates = history_items[-10:]
+        target_phase = (
+            decision.phase
+            or snapshot.metadata.get("phase")
+            or self.config.default_phase
+        )
         if decision.summary:
+            meta_payload: dict[str, Any] = {
+                "orchestrator_summary": decision.summary,
+                "orchestrator_last_command": [cmd.text for cmd in decision.commands],
+                "phase": target_phase,
+                "blockers": list(decision.blockers) if decision.blockers else [],
+            }
+            if phase_history_updates is not None:
+                meta_payload["phase_history"] = phase_history_updates
             self.agent_service.update_status(
                 snapshot.branch,
                 status="orchestrated",
-                metadata={
-                    "orchestrator_summary": decision.summary,
-                    "orchestrator_last_command": [cmd.text for cmd in decision.commands],
-                    "phase": decision.phase or snapshot.metadata.get("phase") or self.config.default_phase,
-                    "blockers": list(decision.blockers) if decision.blockers else [],
-                },
+                metadata=meta_payload,
             )
-        elif decision.phase or decision.blockers:
-            meta_updates: dict[str, object] = {}
+            snapshot.metadata.update(meta_payload)
+        elif decision.phase or decision.blockers or phase_history_updates is not None:
+            meta_updates: dict[str, Any] = {}
             if decision.phase:
                 meta_updates["phase"] = decision.phase
             if decision.blockers:
                 meta_updates["blockers"] = list(decision.blockers)
+            if phase_history_updates is not None:
+                meta_updates["phase_history"] = phase_history_updates
             if meta_updates:
                 self.agent_service.update_status(snapshot.branch, metadata=meta_updates)
+                snapshot.metadata.update(meta_updates)
+        else:
+            if phase_history_updates is not None:
+                self.agent_service.update_status(
+                    snapshot.branch,
+                    metadata={"phase_history": phase_history_updates},
+                )
+                snapshot.metadata["phase_history"] = phase_history_updates
         confirmation_required = decision.requires_confirmation
         pending_payloads: list[dict[str, Any]] = []
         if decision.has_commands:
             sent = 0
+            dispatched_texts: list[str] = []
             for command in decision.commands:
                 if sent >= self.config.max_commands_per_cycle:
                     break
@@ -237,10 +343,36 @@ class OrchestratorService:
                 if requires_manual:
                     pending_payloads.append(payload)
                 else:
-                    self._enqueue_command(payload, snapshot.branch)
-                    sent += 1
+                    dispatched = self._enqueue_command(payload, snapshot.branch)
+                    if dispatched:
+                        sent += 1
+                        dispatched_texts.append(command.text)
+                    else:
+                        queued = self._pending_by_branch.get(snapshot.branch)
+                        if queued:
+                            snapshot.metadata["queued_commands"] = [dict(item) for item in queued]
+                        elif "queued_commands" in snapshot.metadata:
+                            snapshot.metadata["queued_commands"] = []
+            if not decision.summary and dispatched_texts:
+                existing_cmds = snapshot.metadata.get("orchestrator_last_command")
+                if isinstance(existing_cmds, list):
+                    merged_cmds = [str(item) for item in existing_cmds if isinstance(item, str)]
+                else:
+                    merged_cmds = []
+                merged_cmds.extend(dispatched_texts)
+                merged_cmds = merged_cmds[-10:]
+                self.agent_service.update_status(
+                    snapshot.branch,
+                    metadata={"orchestrator_last_command": merged_cmds},
+                )
+                snapshot.metadata["orchestrator_last_command"] = merged_cmds
         for payload in pending_payloads:
             self._record_pending_confirmation(snapshot.branch, payload)
+        queued_view = self._pending_by_branch.get(snapshot.branch)
+        if queued_view:
+            snapshot.metadata["queued_commands"] = [dict(item) for item in queued_view]
+        elif "queued_commands" in snapshot.metadata:
+            snapshot.metadata["queued_commands"] = []
         should_notify = decision.notify and (
             not self.config.notify_only_on_confirmation
             or confirmation_required
@@ -262,16 +394,158 @@ class OrchestratorService:
                 )
             )
 
-    def _enqueue_command(self, payload: dict[str, Any], branch: str | None = None) -> None:
-        self.bus.append_command(payload)
+    def _enqueue_command(
+        self,
+        payload: dict[str, Any],
+        branch: str | None = None,
+        *,
+        force: bool = False,
+    ) -> bool:
+        session = payload.get("session")
+        if session and force:
+            self._session_busy_until.pop(session, None)
+        if session and not force and not self._can_send_session(session):
+            entry = self._queue_command(session, payload, branch)
+            if branch and entry.get("summary"):
+                self._update_branch_queue(branch, add=entry["summary"])
+            metrics.record_command("queued")
+            return False
+        self._dispatch_command(payload, branch, queued=False, force=force)
+        return True
+
+    def _dispatch_command(
+        self,
+        payload: dict[str, Any],
+        branch: str | None,
+        *,
+        queued: bool,
+        force: bool = False,
+    ) -> None:
+        now = time.time()
+        session = payload.get("session")
+        if self.config.dry_run:
+            logger.info("[dry-run] skip dispatch: %s", payload.get("text"))
+            metrics.record_command("dry_run")
+        else:
+            self.bus.append_command(payload)
+            if session:
+                self._session_busy_until[session] = now + self.config.session_cooldown_seconds
+            metrics.record_command("dispatched")
         if branch:
-            self._last_command_at[branch] = time.time()
-            self._log_action({
-                "ts": time.time(),
+            self._last_command_at[branch] = now
+            log_payload = {
+                "ts": now,
                 "branch": branch,
                 "event": "command",
                 "payload": payload,
-            })
+            }
+            if queued:
+                log_payload["queued"] = True
+            if self.config.dry_run:
+                log_payload["dry_run"] = True
+            self._log_action(log_payload)
+
+    def _queue_command(
+        self,
+        session: str,
+        payload: dict[str, Any],
+        branch: str | None,
+    ) -> dict[str, Any]:
+        meta = dict(payload.get("meta") or {})
+        queue_id = meta.get("queue_id") or f"queue-{uuid4().hex}"
+        queued_at = meta.get("queued_at") or time.time()
+        meta["queue_id"] = queue_id
+        meta["queued_at"] = queued_at
+        enriched_payload = dict(payload)
+        enriched_payload["meta"] = meta
+        entry = {
+            "branch": branch,
+            "payload": enriched_payload,
+            "queue_id": queue_id,
+            "session": session,
+            "queued_at": queued_at,
+            "summary": {
+                "queue_id": queue_id,
+                "text": enriched_payload.get("text"),
+                "session": session,
+                "risk_level": meta.get("risk_level"),
+                "queued_at": queued_at,
+            },
+        }
+        queue = self._session_queue.setdefault(session, [])
+        queue.append(entry)
+        if branch:
+            self._log_action(
+                {
+                    "ts": queued_at,
+                    "branch": branch,
+                    "event": "queued",
+                    "payload": enriched_payload,
+                }
+            )
+        return entry
+
+    def _flush_queued_commands(self) -> None:
+        if not self._session_queue:
+            return
+        now = time.time()
+        for session in list(self._session_queue.keys()):
+            if not self._can_send_session(session, now):
+                continue
+            queue = self._session_queue.get(session)
+            if not queue:
+                self._session_queue.pop(session, None)
+                continue
+            entry = queue.pop(0)
+            payload = entry.get("payload", {})
+            branch = entry.get("branch")
+            queue_id = entry.get("queue_id")
+            self._dispatch_command(payload, branch, queued=True)
+            if branch and queue_id:
+                self._update_branch_queue(branch, remove_id=queue_id)
+            if queue:
+                self._session_queue[session] = queue
+            else:
+                self._session_queue.pop(session, None)
+
+    def _can_send_session(self, session: str, now: float | None = None) -> bool:
+        busy_until = self._session_busy_until.get(session)
+        if busy_until is None:
+            return True
+        current = now or time.time()
+        if current >= busy_until:
+            self._session_busy_until.pop(session, None)
+            return True
+        return False
+
+    def _update_branch_queue(
+        self,
+        branch: str | None,
+        *,
+        add: dict[str, Any] | None = None,
+        remove_id: str | None = None,
+    ) -> None:
+        if not branch:
+            return
+        current = list(self._pending_by_branch.get(branch, []))
+        changed = False
+        if add:
+            current.append(add)
+            changed = True
+        if remove_id:
+            filtered = [item for item in current if item.get("queue_id") != remove_id]
+            if len(filtered) != len(current):
+                current = filtered
+                changed = True
+        if not changed:
+            return
+        metrics.set_queue_size(branch, len(current))
+        if current:
+            self._pending_by_branch[branch] = current
+            self.agent_service.update_status(branch, metadata={"queued_commands": current})
+        else:
+            self._pending_by_branch.pop(branch, None)
+            self.agent_service.update_status(branch, metadata={"queued_commands": []})
 
     def _record_pending_confirmation(self, branch: str, payload: dict[str, Any]) -> None:
         session = self.state_store.get_agent_session(branch)
@@ -284,6 +558,7 @@ class OrchestratorService:
         else:
             updated = [payload]
         self.agent_service.update_status(branch, metadata={"pending_confirmation": updated})
+        metrics.set_pending_confirmations(branch, len(updated))
         self._log_action(
             {
                 "ts": time.time(),
@@ -297,6 +572,14 @@ class OrchestratorService:
         self.agent_service.update_status(
             snapshot.branch,
             metadata={"orchestrator_error": message},
+        )
+        metrics.record_error(snapshot.branch)
+        self.notifier.send(
+            NotificationMessage(
+                title="Orchestrator 异常",
+                body=f"{snapshot.branch}: {message}",
+                meta={"requires_attention": True, "severity": "critical"},
+            )
         )
 
     def _update_heartbeat(self, snapshot: AgentSnapshot, now_ts: int) -> None:
@@ -341,7 +624,7 @@ class OrchestratorService:
             if command_text and item.get("text") != command_text:
                 remaining.append(item)
                 continue
-            self._enqueue_command(item, branch)
+            self._enqueue_command(item, branch, force=True)
             executed = True
         updates: dict[str, Any] = {"pending_confirmation": remaining}
         if response_meta:
@@ -352,6 +635,7 @@ class OrchestratorService:
                 updates["confirmation_responses"] = [response_meta]
         if executed:
             self.agent_service.update_status(branch, metadata=updates)
+            metrics.set_pending_confirmations(branch, len(remaining))
             self._log_action(
                 {
                     "ts": time.time(),
@@ -389,6 +673,7 @@ class OrchestratorService:
             else:
                 updates["confirmation_responses"] = [response_meta]
         self.agent_service.update_status(branch, metadata=updates)
+        metrics.set_pending_confirmations(branch, len(remaining))
         self._log_action(
             {
                 "ts": time.time(),

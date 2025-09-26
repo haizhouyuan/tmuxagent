@@ -100,6 +100,120 @@
         overflow-y: auto;
         padding-right: 0.4rem;
       }
+      .orchestrator-section {
+        margin-top: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+      }
+      .orchestrator-section h3 {
+        margin: 0;
+        font-size: 1.15rem;
+        color: #1e293b;
+      }
+      .orchestrator-grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+      .orchestrator-card {
+        border-radius: 0.9rem;
+        border: 1px solid #dbe2f1;
+        background: linear-gradient(150deg, #f8fafc 0%, #eef2ff 60%);
+        padding: 1rem 1.1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.7rem;
+      }
+      .orchestrator-card--attention {
+        border-color: rgba(248, 113, 113, 0.55);
+        box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.2);
+      }
+      .orchestrator-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 0.65rem;
+      }
+      .orchestrator-title {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #1e293b;
+      }
+      .orchestrator-phase {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.22rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        background: rgba(37, 99, 235, 0.12);
+        color: #1d4ed8;
+        font-weight: 600;
+      }
+      .orchestrator-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        font-size: 0.78rem;
+        color: #475569;
+      }
+      .orchestrator-progress {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+      .orchestrator-progress span {
+        font-size: 0.7rem;
+        padding: 0.18rem 0.45rem;
+        border-radius: 0.45rem;
+        background: #e2e8f0;
+        color: #1e293b;
+      }
+      .orchestrator-progress span[data-status="done"] {
+        background: rgba(34, 197, 94, 0.18);
+        color: #166534;
+      }
+      .orchestrator-progress span[data-status="active"] {
+        background: rgba(59, 130, 246, 0.18);
+        color: #1d4ed8;
+      }
+      .orchestrator-summary {
+        font-size: 0.8rem;
+        color: #1f2937;
+        background: rgba(59, 130, 246, 0.08);
+        border-radius: 0.6rem;
+        padding: 0.5rem 0.65rem;
+        white-space: pre-wrap;
+      }
+      .orchestrator-section .empty-state {
+        margin: 0;
+      }
+      .orchestrator-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        font-size: 0.78rem;
+        color: #475569;
+      }
+      .orchestrator-list div {
+        background: rgba(226, 232, 240, 0.6);
+        padding: 0.35rem 0.55rem;
+        border-radius: 0.5rem;
+      }
+      .orchestrator-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        font-size: 0.7rem;
+      }
+      .orchestrator-tags span {
+        background: rgba(37, 99, 235, 0.12);
+        color: #1d4ed8;
+        padding: 0.2rem 0.45rem;
+        border-radius: 0.45rem;
+      }
       .board-project {
         border: 1px solid #cbd5f5;
         border-radius: 0.85rem;
@@ -241,6 +355,109 @@
         background: #1d4ed8;
       }
 
+      function buildListMarkup(entries, options = {}) {
+        if (!entries || !entries.length) {
+          return '';
+        }
+        const parts = entries.map((entry) => {
+          const text = escapeHtml(entry.text || '命令');
+          const metaParts = [];
+          if (entry.session) {
+            metaParts.push(`@ ${escapeHtml(entry.session)}`);
+          }
+          if (entry.risk_level) {
+            metaParts.push(`风险: ${escapeHtml(entry.risk_level)}`);
+          }
+          if (entry.queued_at_display) {
+            metaParts.push(entry.queued_at_display);
+          }
+          const suffix = metaParts.length ? ` ${metaParts.join(' · ')}` : '';
+          return `<div>• ${text}${suffix}</div>`;
+        });
+        return parts.join('');
+      }
+
+      function renderOrchestratorBoard(items) {
+        if (!orchestratorGrid) {
+          return;
+        }
+        orchestratorGrid.innerHTML = '';
+        if (!items || !items.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty-state';
+          empty.textContent = '暂无 orchestrator 会话。';
+          orchestratorGrid.appendChild(empty);
+          return;
+        }
+        for (const item of items) {
+          const card = document.createElement('article');
+          card.className = 'orchestrator-card';
+          if (item.attention) {
+            card.classList.add('orchestrator-card--attention');
+          }
+          card.dataset.orchestratorCard = 'true';
+          card.dataset.session = item.session || '';
+          card.dataset.branch = item.branch || '';
+          card.dataset.phase = item.phase || '';
+
+          const headerHtml = `
+            <header class="orchestrator-card-header">
+              <h3 class="orchestrator-title">${escapeHtml(item.title || item.session || 'Orchestrator')}</h3>
+              <span class="orchestrator-phase">${escapeHtml(item.phase || '未定义')}</span>
+            </header>
+          `;
+          const metaParts = [`Session: ${escapeHtml(item.session || '')}`];
+          if (item.responsible) {
+            metaParts.push(`负责人: ${escapeHtml(item.responsible)}`);
+          }
+          if (item.heartbeat_display) {
+            metaParts.push(`❤️ ${escapeHtml(item.heartbeat_display)}`);
+          }
+          const progressBadges = (item.phase_progress || [])
+            .map((stage) => `<span data-status="${escapeHtml(stage.status)}">${escapeHtml(stage.name)}</span>`)
+            .join('');
+          const progressSection = progressBadges
+            ? `<div class="orchestrator-progress">${progressBadges}</div>`
+            : '';
+          const summarySection = item.summary
+            ? `<div class="orchestrator-summary">${escapeHtml(item.summary)}</div>`
+            : '';
+          const blockersSection = (item.blockers && item.blockers.length)
+            ? `<div><strong>阻塞:</strong><div class="orchestrator-list">${item.blockers
+                .map((blocker) => `<div>• ${escapeHtml(blocker)}</div>`)
+                .join('')}</div></div>`
+            : '';
+          const pendingSection = buildListMarkup(item.pending_confirmation)
+            ? `<div><strong>待确认:</strong><div class="orchestrator-list">${buildListMarkup(item.pending_confirmation)}</div></div>`
+            : '';
+          const queuedSection = buildListMarkup(item.queued_commands)
+            ? `<div><strong>排队执行:</strong><div class="orchestrator-list">${buildListMarkup(item.queued_commands)}</div></div>`
+            : '';
+          const lastCommandsSection = (item.last_commands && item.last_commands.length)
+            ? `<div><strong>最近命令:</strong><div class="orchestrator-list">${item.last_commands
+                .map((cmd) => `<div>${escapeHtml(cmd)}</div>`)
+                .join('')}</div></div>`
+            : '';
+          const dependsSection = (item.depends_on && item.depends_on.length)
+            ? `<div>依赖：${escapeHtml(item.depends_on.join(', '))}</div>`
+            : '';
+          const tagsSection = (item.tags && item.tags.length)
+            ? `<div class="orchestrator-tags">${item.tags
+                .map((tag) => `<span>${escapeHtml(tag)}</span>`)
+                .join('')}</div>`
+            : '';
+          const errorSection = item.error
+            ? `<div class="orchestrator-summary" style="background: rgba(248,113,113,0.18); color:#991b1b;">⚠️ ${escapeHtml(item.error)}</div>`
+            : '';
+
+          const metaHtml = `<div class="orchestrator-meta">${metaParts
+            .map((entry) => `<span>${entry}</span>`)
+            .join('')}</div>`;
+
+          card.innerHTML = `${headerHtml}${metaHtml}${progressSection}${summarySection}${blockersSection}${pendingSection}${queuedSection}${lastCommandsSection}${dependsSection}${tagsSection}${errorSection}`;
+          orchestratorGrid.appendChild(card);
+        }
+      }
       .pane-toolbar {
         display: flex;
         flex-wrap: wrap;
@@ -591,6 +808,101 @@
           <div class="board-container" id="board-container">
             <div class="empty-state">正在加载 pane 状态...</div>
           </div>
+          <div class="orchestrator-section">
+            <h3>Orchestrator</h3>
+            <div class="orchestrator-grid" id="orchestrator-grid">
+              {% if orchestrator %}
+                {% for item in orchestrator %}
+                  <article
+                    class="orchestrator-card{% if item.attention %} orchestrator-card--attention{% endif %}"
+                    data-orchestrator-card
+                    data-session="{{ item.session or '' }}"
+                    data-branch="{{ item.branch or '' }}"
+                    data-phase="{{ item.phase or '' }}"
+                  >
+                    <header class="orchestrator-card-header">
+                      <h3 class="orchestrator-title">{{ item.title }}</h3>
+                      <span class="orchestrator-phase">{{ item.phase }}</span>
+                    </header>
+                    <div class="orchestrator-meta">
+                      <span>Session: {{ item.session }}</span>
+                      {% if item.responsible %}<span>负责人: {{ item.responsible }}</span>{% endif %}
+                      {% if item.heartbeat_display %}<span>❤️ {{ item.heartbeat_display }}</span>{% endif %}
+                    </div>
+                    {% if item.phase_progress %}
+                      <div class="orchestrator-progress">
+                        {% for stage in item.phase_progress %}
+                          <span data-status="{{ stage.status }}">{{ stage.name }}</span>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                    {% if item.summary %}
+                      <div class="orchestrator-summary">{{ item.summary }}</div>
+                    {% endif %}
+                    {% if item.blockers %}
+                      <div>
+                        <strong>阻塞:</strong>
+                        <div class="orchestrator-list">
+                          {% for blocker in item.blockers %}
+                            <div>• {{ blocker }}</div>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endif %}
+                    {% if item.pending_confirmation %}
+                      <div>
+                        <strong>待确认:</strong>
+                        <div class="orchestrator-list">
+                          {% for pending in item.pending_confirmation %}
+                            <div>
+                              • {{ pending.text or '命令' }}{% if pending.session %} @ {{ pending.session }}{% endif %}{% if pending.risk_level %} · 风险: {{ pending.risk_level }}{% endif %}
+                            </div>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endif %}
+                    {% if item.queued_commands %}
+                      <div>
+                        <strong>排队执行:</strong>
+                        <div class="orchestrator-list">
+                          {% for queued in item.queued_commands %}
+                            <div>
+                              • {{ queued.text or '命令' }}{% if queued.session %} @ {{ queued.session }}{% endif %}{% if queued.risk_level %} · 风险: {{ queued.risk_level }}{% endif %}{% if queued.queued_at_display %} · {{ queued.queued_at_display }}{% endif %}
+                            </div>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endif %}
+                    {% if item.last_commands %}
+                      <div>
+                        <strong>最近命令:</strong>
+                        <div class="orchestrator-list">
+                          {% for cmd in item.last_commands %}
+                            <div>{{ cmd }}</div>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endif %}
+                    {% if item.depends_on %}
+                      <div>依赖：{{ item.depends_on | join(', ') }}</div>
+                    {% endif %}
+                    {% if item.tags %}
+                      <div class="orchestrator-tags">
+                        {% for tag in item.tags %}
+                          <span>{{ tag }}</span>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                    {% if item.error %}
+                      <div class="orchestrator-summary" style="background: rgba(248,113,113,0.18); color:#991b1b;">⚠️ {{ item.error }}</div>
+                    {% endif %}
+                  </article>
+                {% endfor %}
+              {% else %}
+                <div class="empty-state">暂无 orchestrator 会话。</div>
+              {% endif %}
+            </div>
+          </div>
         </section>
         <section aria-labelledby="pane-section-title">
           <h2 id="pane-section-title">实时 Pane</h2>
@@ -727,7 +1039,8 @@
         projects: {{ projects | tojson }},
         pane_activity: {{ pane_activity | tojson }},
         panes: {{ panes | tojson }},
-        agent_sessions: {{ agent_sessions | tojson }}
+        agent_sessions: {{ agent_sessions | tojson }},
+        orchestrator: {{ orchestrator | tojson }}
       };
       window.captureLines = {{ capture_lines }};
     </script>
@@ -737,6 +1050,7 @@
       const layoutButton = document.getElementById('cycle-layout');
       const paneGrid = document.getElementById('pane-grid');
       const boardContainer = document.getElementById('board-container');
+      const orchestratorGrid = document.getElementById('orchestrator-grid');
       const paneFilterInput = document.getElementById('pane-filter');
       const paneTemplate = document.getElementById('pane-template');
 
@@ -752,6 +1066,7 @@
       let projectStore = window.dashboardBootstrap.projects || [];
       const paneSummaryCache = new Map();
       let agentSessionStore = window.dashboardBootstrap.agent_sessions || [];
+      let orchestratorStore = window.dashboardBootstrap.orchestrator || [];
       const refreshIntervalMs = 3000;
       let refreshTimer = null;
       let autoRefreshEnabled = true;
@@ -1223,7 +1538,9 @@
           const data = await response.json();
           projectStore = data.projects || [];
           agentSessionStore = data.agent_sessions || [];
+          orchestratorStore = data.orchestrator || [];
           renderBoard(projectStore);
+          renderOrchestratorBoard(orchestratorStore);
           paneActivityStore = new Map(Object.entries(data.pane_activity || {}));
           syncPaneGrid(data.panes || []);
         } catch (err) {
@@ -1429,7 +1746,9 @@
           applyPaneAiSummary(card, paneId);
         });
         projectStore = bootstrapData.projects || [];
+        orchestratorStore = bootstrapData.orchestrator || [];
         renderBoard(projectStore || []);
+        renderOrchestratorBoard(orchestratorStore || []);
         paneActivityStore = new Map(Object.entries(bootstrapData.pane_activity || {}));
         syncPaneGrid(bootstrapData.panes || []);
         scheduleRefresh();

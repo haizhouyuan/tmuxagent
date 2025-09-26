@@ -9,6 +9,7 @@ A lightweight orchestration agent for tmux-based AI development environments. Th
 - File-based and webhook-driven approval flow with signed tokens.
 - Notification adapters (stdout 默认，可选 Server酱、WeCom webhook、WeCom 应用消息、本地门户总线)。
 - Worktree-aware agent CLI：一键创建 Git worktree、启动专用 tmux 会话并注入 Claude/Codex 模板。
+- Orchestrator 支持多 pane 调度、排队/依赖管理，并输出 Prometheus 指标、Dry-Run 与 JSONL 回放工具（详见 `docs/orchestrator_monitoring.md`）。
 
 ### 通知通道
 - `notify: "stdout"`：输出至 STDOUT，适合本地调试。

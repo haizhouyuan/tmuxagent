@@ -15,6 +15,8 @@ from tmux_agent.orchestrator.codex_client import FakeCodexClient
 from tmux_agent.orchestrator.config import CodexConfig
 from tmux_agent.orchestrator.config import OrchestratorConfig
 from tmux_agent.orchestrator.config import PromptConfig
+from tmux_agent.orchestrator.config import TaskSpec
+from tmux_agent.orchestrator.replay import summarize_events
 from tmux_agent.orchestrator.service import OrchestratorService
 from tmux_agent.state import StateStore
 
@@ -137,6 +139,7 @@ def test_orchestrator_injects_commands(tmp_path):
         assert metadata.get("phase") == "executing"
 
         service._last_command_at["storyapp/feature-x"] = time.time() - 3600
+        service._session_busy_until.clear()
         service.run_once()
         commands_final = _read_jsonl(bus.commands_path)
         assert commands_final[-1]["text"] == "echo second"
@@ -261,3 +264,214 @@ def test_orchestrator_respects_dependencies(tmp_path):
     finally:
         service.agent_service.close()
         store.close()
+
+
+def test_orchestrator_applies_task_plan(tmp_path):
+    log_path = tmp_path / "logs" / "plan.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("planning\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/plan"
+    _append_agent(store, branch, "agent-storyapp-plan", log_path)
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=5.0,
+        session_cooldown_seconds=5.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        tasks=[
+            TaskSpec(
+                branch=branch,
+                title="功能联调",
+                depends_on=["storyapp/base"],
+                responsible="lily",
+                phases=["planning", "executing", "verifying", "done"],
+                tags=["high-priority"],
+            )
+        ],
+    )
+
+    codex = FakeCodexClient(
+        [
+            OrchestratorDecision(
+                summary=None,
+                notify=None,
+                requires_confirmation=False,
+                phase="planning",
+                blockers=(),
+                commands=(),
+            )
+        ]
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=codex,
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        session = store.get_agent_session(branch)
+        assert session is not None
+        metadata = session["metadata"]
+        assert metadata.get("depends_on") == ["storyapp/base"]
+        assert metadata.get("responsible") == "lily"
+        assert metadata.get("phase_plan") == ["planning", "executing", "verifying", "done"]
+        assert metadata.get("orchestrator_task") == "功能联调"
+        assert metadata.get("tags") == ["high-priority"]
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_respects_session_cooldown_queue(tmp_path):
+    log_path = tmp_path / "logs" / "queue.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("queue\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/queue"
+    session_name = "agent-storyapp-queue"
+    _append_agent(store, branch, session_name, log_path)
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=1.0,
+        session_cooldown_seconds=30.0,
+        max_commands_per_cycle=5,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+    )
+
+    decision = OrchestratorDecision(
+        summary=None,
+        notify=None,
+        requires_confirmation=False,
+        phase="executing",
+        blockers=(),
+        commands=(
+            CommandSuggestion(text="echo first"),
+            CommandSuggestion(text="echo second"),
+        ),
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=FakeCodexClient([decision]),
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        commands = _read_jsonl(bus.commands_path)
+        assert len(commands) == 1
+        assert commands[0]["text"] == "echo first"
+
+        session = store.get_agent_session(branch)
+        assert session is not None
+        metadata = session["metadata"]
+        queued = metadata.get("queued_commands")
+        assert queued and queued[0]["text"] == "echo second"
+
+        service._session_busy_until.clear()
+        service._flush_queued_commands()
+
+        commands_after = _read_jsonl(bus.commands_path)
+        assert len(commands_after) == 2
+        assert commands_after[-1]["text"] == "echo second"
+
+        session = store.get_agent_session(branch)
+        assert session["metadata"].get("queued_commands") == []
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_dry_run_skips_dispatch(tmp_path):
+    log_path = tmp_path / "logs" / "dry.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("dry-run\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/dry"
+    _append_agent(store, branch, "agent-storyapp-dry", log_path)
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=1.0,
+        session_cooldown_seconds=5.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        dry_run=True,
+    )
+
+    decision = OrchestratorDecision(
+        summary=None,
+        notify=None,
+        requires_confirmation=False,
+        phase="executing",
+        blockers=(),
+        commands=(CommandSuggestion(text="echo dry"),),
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=FakeCodexClient([decision]),
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        commands = _read_jsonl(bus.commands_path)
+        assert commands == []
+        session = store.get_agent_session(branch)
+        assert session is not None
+        assert session["metadata"].get("orchestrator_last_command") == ["echo dry"]
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_replay_summarize_events():
+    events = [
+        {"event": "command", "payload": {"text": "echo 1"}, "ts": 100.0},
+        {"event": "queued", "ts": 101.0},
+        {"event": "pending_confirmation", "ts": 102.0},
+        {"event": "confirmation", "ts": 103.0},
+    ]
+    summary = summarize_events(events)
+    assert summary["counts"]["command"] == 1
+    assert summary["max_queue_depth"] >= 1
+    assert summary["samples"] == 4

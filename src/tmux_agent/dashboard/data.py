@@ -82,6 +82,7 @@ class AgentSessionRow:
     last_prompt: str | None
     created_at: datetime
     updated_at: datetime
+    metadata: dict[str, Any]
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "AgentSessionRow":
@@ -96,6 +97,7 @@ class AgentSessionRow:
             last_prompt=payload.get("last_prompt"),
             created_at=datetime.fromtimestamp(int(payload.get("created_at", 0)), tz=timezone.utc),
             updated_at=datetime.fromtimestamp(int(payload.get("updated_at", 0)), tz=timezone.utc),
+            metadata=dict(payload.get("metadata") or {}),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -110,4 +112,5 @@ class AgentSessionRow:
             "last_prompt": self.last_prompt,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "metadata": self.metadata,
         }

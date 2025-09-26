@@ -51,23 +51,26 @@
 - **门户升级**
   - 8787 页面增加“等待确认”“阻塞任务”板块；支持从手机提交 `/approve`、自定义指令。
 
-### 阶段 4：多 pane 协作与任务板（进行中）
-- **进度**：
-  - 移动门户新增 “Orchestrator 概览” 网格，展示 phase、阻塞、待确认、最新命令与心跳。
-  - 支持 `depends_on` 阻塞判断，所有 pending/prompt/动作写入 `.tmuxagent/logs/orchestrator-actions.jsonl`。
-- **待办**：
-  - 在 8702 仪表盘建立 “Orchestrator” 专栏，展示阶段、摘要、历史命令及依赖图。
-  - 完善 orchestrator 级别的任务编排（链式阶段、责任人映射）。
-  - 加入锁/队列避免同一 pane 并发执行。
+### 阶段 4：多 pane 协作与任务板 ✔️ 完成
+- **新交付**：
+  - 8702 仪表盘新增 “Orchestrator” 专栏，与移动门户的概览保持同步，展示阶段、任务摘要、依赖、排队/待确认命令与心跳。
+  - Orchestrator 配置引入 `tasks` 描述，自动补齐链式阶段、责任人、标签与依赖，并在 metadata 中透出。
+  - 同一 session/pane 的调度加入冷却 + 队列机制，审计日志会记录 `queued`/`command` 事件，`queued_commands` 元数据实时反映排队状态。
+- **审计增强**：所有注入、排队、确认事件写入 `.tmuxagent/logs/orchestrator-actions.jsonl`，供回放工具与治理使用。
 
-### 阶段 5：可靠性与可观测性（待启动）
+### 阶段 5：可靠性与可观测性 ✔️ 完成
 - **监控指标**
-  - 输出 Prometheus/Grafana 指标：命令数量、失败率、冷却次数、待确认数量等。
-  - 异常（如 codex 失败、长时间无心跳）触发高优先级告警。
+  - Prometheus `/metrics` 与 orchestrator exporter（可配置 `metrics_port`）输出命令状态、排队深度、待确认数量、决策耗时、错误次数，可直接接入 Grafana/Alertmanager。
+  - `_record_error` 统一触发高优先级通知（severity=critical），并配合指标做自动告警。
 - **回放 / 模拟模式**
-  - 提供 dry-run/回放功能，用历史日志测试 prompt 和策略。
+  - 新增 `tmux-agent-orchestrator --dry-run` 保护模式，演练 prompt 而不落地命令。
+  - 提供 `tmux-agent-orchestrator-replay --log …` 工具复盘 JSONL 审计日志，输出事件统计、最近命令与最大队列深度。
 - **文档与运维**
-  - 编写 orchestrator 配置指南、微信回路配置说明、常见故障排查手册。
+  - 新增《docs/orchestrator_monitoring.md》，包含指标接入、dry-run、回放与运维巡检建议。
+
+## 下一步重点
+- 改善指标告警阈值与 Grafana Dashboard（参考 monitoring 文档），并纳入运维流程。
+- 在生产环境执行全流程业务回归测试，验证 orchestrator 闭环能力。
 
 ## 依赖与风险提示
 - Codex CLI 依赖稳定网络与代理；需集中管理配置与重试策略。

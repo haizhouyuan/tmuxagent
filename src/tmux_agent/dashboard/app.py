@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from fastapi import Request
 from fastapi import status
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 
 from .analyzer import PaneStatus
@@ -21,6 +23,8 @@ from .analyzer import PaneStatusAnalyzer
 from .analyzer import _aggregate_status
 from pydantic import BaseModel
 from pydantic import Field
+from prometheus_client import CONTENT_TYPE_LATEST
+from prometheus_client import generate_latest
 from typing import Optional
 
 from .config import DashboardConfig
@@ -150,6 +154,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
         board_payload = [session.to_dict() for session in board]
         activities = _flatten_activity(board)
         projects = _group_by_project(board)
+        orchestrator_overview = _build_orchestrator_overview(agent_sessions_payload)
         for snap_payload in pane_payload:
             activity = activities.get(snap_payload["pane_id"])
             if activity and activity.get("agent_info"):
@@ -164,12 +169,18 @@ def create_app(config: DashboardConfig) -> FastAPI:
                 "panes": pane_payload,
                 "agent_sessions": agent_sessions_payload,
                 "capture_lines": config.capture_lines,
+                "orchestrator": orchestrator_overview,
             },
         )
 
     @app.get("/healthz")
     def healthcheck() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    def metrics_endpoint() -> Response:
+        payload = generate_latest()
+        return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
     @app.post("/api/approvals/{host}/{pane_id}/{stage}")
     def api_approval_decision(
@@ -334,6 +345,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
         board_payload = [session.to_dict() for session in board]
         activity_map = _flatten_activity(board)
         projects = _group_by_project(board)
+        orchestrator_overview = _build_orchestrator_overview(agent_sessions_payload)
         return {
             "board": board_payload,
             "projects": projects,
@@ -350,6 +362,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
                 }
                 for snap in snapshots
             ],
+            "orchestrator": orchestrator_overview,
         }
 
     return app
@@ -386,3 +399,161 @@ def _group_by_project(board: list[SessionActivity]) -> list[dict[str, Any]]:
     for name in sorted(projects.keys()):
         ordered_projects.append(projects[name])
     return ordered_projects
+
+
+def _phase_progress(
+    phase_plan: list[str],
+    phase_history: list[str],
+    current_phase: str | None,
+) -> list[dict[str, Any]]:
+    progress: list[dict[str, Any]] = []
+    for phase in phase_plan:
+        status = "pending"
+        if phase in phase_history and phase != current_phase:
+            status = "done"
+        if current_phase == phase:
+            status = "active"
+        progress.append({"name": phase, "status": status})
+    if current_phase and current_phase not in phase_plan:
+        progress.append({"name": current_phase, "status": "active"})
+    return progress
+
+
+def _build_orchestrator_overview(agent_sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    overview: list[dict[str, Any]] = []
+    for session in agent_sessions:
+        metadata = session.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            continue
+        has_signal = any(
+            metadata.get(field)
+            for field in (
+                "phase",
+                "orchestrator_summary",
+                "pending_confirmation",
+                "queued_commands",
+                "orchestrator_error",
+            )
+        )
+        if not has_signal:
+            continue
+
+        phase_plan = [str(item) for item in metadata.get("phase_plan", []) if isinstance(item, str)]
+        phase_history = [str(item) for item in metadata.get("phase_history", []) if isinstance(item, str)]
+        current_phase = str(metadata.get("phase") or "未定义")
+        blockers = [str(item) for item in metadata.get("blockers", []) if str(item)]
+        pending_entries: list[dict[str, Any]] = []
+        raw_pending = metadata.get("pending_confirmation")
+        if isinstance(raw_pending, list):
+            for entry in raw_pending:
+                if isinstance(entry, dict):
+                    meta_section = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+                    pending_entries.append(
+                        {
+                            "text": entry.get("text") or entry.get("command") or "",
+                            "session": entry.get("session"),
+                            "risk_level": meta_section.get("risk_level"),
+                        }
+                    )
+                else:
+                    pending_entries.append({"text": str(entry)})
+        queued_entries: list[dict[str, Any]] = []
+        raw_queued = metadata.get("queued_commands")
+        if isinstance(raw_queued, list):
+            for entry in raw_queued:
+                if isinstance(entry, dict):
+                    queued_at = entry.get("queued_at")
+                    queued_iso = None
+                    queued_display = None
+                    if isinstance(queued_at, (int, float)):
+                        try:
+                            queued_dt = datetime.fromtimestamp(float(queued_at), tz=timezone.utc)
+                            queued_iso = queued_dt.isoformat()
+                            queued_display = queued_dt.astimezone().strftime("%H:%M:%S")
+                        except (OSError, OverflowError, ValueError):
+                            queued_display = str(queued_at)
+                    queued_entries.append(
+                        {
+                            "queue_id": entry.get("queue_id"),
+                            "text": entry.get("text") or "",
+                            "session": entry.get("session"),
+                            "risk_level": entry.get("risk_level"),
+                            "queued_at": queued_at,
+                            "queued_at_iso": queued_iso,
+                            "queued_at_display": queued_display,
+                        }
+                    )
+                else:
+                    queued_entries.append({"text": str(entry)})
+        depends = [str(item) for item in metadata.get("depends_on", []) if str(item)]
+
+        heartbeat_ts = metadata.get("orchestrator_heartbeat")
+        heartbeat_iso: str | None = None
+        heartbeat_display: str | None = None
+        if isinstance(heartbeat_ts, (int, float)) and heartbeat_ts:
+            try:
+                heartbeat_dt = datetime.fromtimestamp(float(heartbeat_ts), tz=timezone.utc)
+                heartbeat_iso = heartbeat_dt.isoformat()
+                heartbeat_display = heartbeat_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+            except (OSError, OverflowError, ValueError):
+                heartbeat_display = str(heartbeat_ts)
+
+        phase_progress = _phase_progress(phase_plan, phase_history, metadata.get("phase"))
+        progress_fraction = 0.0
+        if phase_progress:
+            total = len(phase_progress)
+            completed = sum(1 for item in phase_progress if item["status"] == "done")
+            active_index = next(
+                (idx for idx, item in enumerate(phase_progress) if item["status"] == "active"),
+                None,
+            )
+            if active_index is not None:
+                progress_fraction = (active_index + 0.5) / total
+            else:
+                progress_fraction = completed / total
+
+        attention = bool(blockers or queued_entries or pending_entries or metadata.get("orchestrator_error"))
+        phase_order = (
+            phase_plan.index(metadata.get("phase"))
+            if metadata.get("phase") in phase_plan
+            else len(phase_plan)
+        )
+
+        overview.append(
+            {
+                "branch": session.get("branch"),
+                "session": session.get("session_name"),
+                "title": metadata.get("orchestrator_task")
+                or session.get("description")
+                or session.get("session_name"),
+                "phase": current_phase,
+                "phase_plan": phase_plan,
+                "phase_history": phase_history,
+                "phase_progress": phase_progress,
+                "progress_fraction": progress_fraction,
+                "blockers": blockers,
+                "pending_confirmation": pending_entries,
+                "queued_commands": queued_entries,
+                "depends_on": depends,
+                "heartbeat": heartbeat_ts,
+                "heartbeat_iso": heartbeat_iso,
+                "heartbeat_display": heartbeat_display,
+                "responsible": metadata.get("responsible"),
+                "summary": metadata.get("orchestrator_summary"),
+                "last_commands": metadata.get("orchestrator_last_command") or [],
+                "error": metadata.get("orchestrator_error"),
+                "attention": attention,
+                "updated_at": session.get("updated_at"),
+                "tags": metadata.get("tags") or [],
+                "phase_order": phase_order,
+            }
+        )
+
+    overview.sort(
+        key=lambda item: (
+            not item["attention"],
+            item.get("phase_order", 0),
+            item.get("session") or "",
+        )
+    )
+    return overview

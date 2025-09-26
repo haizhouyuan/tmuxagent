@@ -39,7 +39,7 @@ def _seed_state(db_path):
         store.close()
 
 
-def _seed_agent_session(db_path, branch: str, session_name: str) -> None:
+def _seed_agent_session(db_path, branch: str, session_name: str, metadata: dict | None = None) -> None:
     store = StateStore(db_path)
     try:
         store.upsert_agent_session(
@@ -50,6 +50,7 @@ def _seed_agent_session(db_path, branch: str, session_name: str) -> None:
             template="qa-template",
             description="检查构建输出",
             last_prompt="请扫描异常",
+            metadata=metadata or {},
         )
     finally:
         store.close()
@@ -207,7 +208,16 @@ def test_agent_sessions_reflected_in_dashboard(tmp_path, monkeypatch):
     fake = FakeTmuxAdapter({"%10": "booting agent\n"})
     fake.set_full_meta("%10", session="agent-demo", window="win", title="agent-demo", active=True, width=120, height=30)
     _install_fake_tmux(monkeypatch, fake)
-    _seed_agent_session(db_path, branch="demo", session_name="agent-demo")
+    _seed_agent_session(
+        db_path,
+        branch="demo",
+        session_name="agent-demo",
+        metadata={
+            "phase": "executing",
+            "orchestrator_summary": "同步中",
+            "queued_commands": [{"text": "echo second", "session": "agent-demo"}],
+        },
+    )
     app = create_app(DashboardConfig(db_path=db_path, template_path=TEMPLATE_DIR))
     client = TestClient(app)
 
@@ -221,6 +231,10 @@ def test_agent_sessions_reflected_in_dashboard(tmp_path, monkeypatch):
     pane_activity = payload["pane_activity"]["%10"]
     assert pane_activity["project"] == "agents"
     assert pane_activity["agent_info"]["template"] == "qa-template"
+    orchestrator = payload.get("orchestrator")
+    assert orchestrator and orchestrator[0]["phase"] == "executing"
+    assert orchestrator[0]["summary"] == "同步中"
+    assert orchestrator[0]["queued_commands"]
 
 
 def test_pane_summary_endpoint(tmp_path, monkeypatch):

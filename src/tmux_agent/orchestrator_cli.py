@@ -27,6 +27,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Orchestrator config TOML (default: .tmuxagent/orchestrator.toml)",
     )
     parser.add_argument("--log-level", type=str, default=os.getenv("LOG_LEVEL", "INFO"))
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run orchestrator without enqueuing commands",
+    )
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        default=None,
+        help="Optional Prometheus exporter port",
+    )
+    parser.add_argument(
+        "--metrics-host",
+        type=str,
+        default=None,
+        help="Prometheus exporter bind host (default: config or 0.0.0.0)",
+    )
     return parser
 
 
@@ -41,6 +58,12 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper
 
     agent_config = load_agent_config(args.config)
     orchestrator_config = load_orchestrator_config(args.orchestrator_config)
+    if args.dry_run:
+        orchestrator_config.dry_run = True
+    if args.metrics_port is not None:
+        orchestrator_config.metrics_port = args.metrics_port
+    if args.metrics_host is not None:
+        orchestrator_config.metrics_host = args.metrics_host
 
     state_store = StateStore(agent_config.expanded_sqlite_path())
     bus = LocalBus(agent_config.expanded_bus_dir())

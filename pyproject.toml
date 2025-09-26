@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.8",
     "PyYAML>=6.0",
     "httpx>=0.27",
+    "prometheus-client>=0.20",
     "tomli>=2.0; python_version < \"3.11\""
 ]
 
@@ -60,3 +61,4 @@ tmux-agent-dashboard = "tmux_agent.dashboard.cli:main"
 tmux-agent = "tmux_agent.agent_cli:main"
 tmux-agent-notify-relay = "tmux_agent.notify_bridge:main"
 tmux-agent-orchestrator = "tmux_agent.orchestrator_cli:main"
+tmux-agent-orchestrator-replay = "tmux_agent.orchestrator.replay:main"

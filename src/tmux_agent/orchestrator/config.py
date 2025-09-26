@@ -4,13 +4,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+from pydantic import Field
+
 try:  # Python 3.11+
     import tomllib as toml_loader  # noqa: WPS433
 except ModuleNotFoundError:  # pragma: no cover - Python <3.11
     import tomli as toml_loader  # type: ignore
 
-from pydantic import BaseModel
-from pydantic import Field
+class TaskSpec(BaseModel):
+    """Static orchestrator task definition used for planning."""
+
+    branch: str
+    title: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    responsible: str | None = None
+    phases: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
 
 
 DEFAULT_CONFIG_PATH = Path(".tmuxagent/orchestrator.toml")
@@ -53,12 +63,17 @@ class OrchestratorConfig(BaseModel):
     cooldown_seconds: float = 120.0
     max_commands_per_cycle: int = 2
     history_lines: int = 400
+    session_cooldown_seconds: float = 20.0
     prompts: PromptConfig = Field(default_factory=PromptConfig)
     phase_prompts: dict[str, Path] = Field(default_factory=dict)
     default_phase: str = "planning"
     completion_phase: str = "done"
     codex: CodexConfig = Field(default_factory=CodexConfig)
     notify_only_on_confirmation: bool = True
+    dry_run: bool = False
+    metrics_port: int | None = None
+    metrics_host: str = "0.0.0.0"
+    tasks: list[TaskSpec] = Field(default_factory=list)
 
     def expand_paths(self, base: Path) -> "OrchestratorConfig":
         clone = self.model_copy(deep=True)
@@ -87,5 +102,6 @@ __all__ = [
     "CodexConfig",
     "OrchestratorConfig",
     "PromptConfig",
+    "TaskSpec",
     "load_orchestrator_config",
 ]
