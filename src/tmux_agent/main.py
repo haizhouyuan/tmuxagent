@@ -11,6 +11,7 @@ from .config import AgentConfig
 from .config import HostConfig
 from .config import load_agent_config
 from .config import load_policy
+from .local_bus import LocalBus
 from .notify import Notifier
 from .runner import HostRuntime
 from .runner import Runner
@@ -40,7 +41,8 @@ def main() -> None:
     policy_config = load_policy(args.policy)
 
     state_store = StateStore(agent_config.expanded_sqlite_path())
-    notifier = Notifier(channel=agent_config.notify_channel)
+    bus = LocalBus(agent_config.expanded_bus_dir())
+    notifier = Notifier(channel=agent_config.notify_channel, bus=bus)
     approval_manager = ApprovalManager(
         store=state_store,
         approval_dir=agent_config.expanded_approval_dir(),
@@ -56,6 +58,7 @@ def main() -> None:
         notifier=notifier,
         approval_manager=approval_manager,
         adapters=adapters,
+        bus=bus,
         dry_run=args.dry_run,
     )
 

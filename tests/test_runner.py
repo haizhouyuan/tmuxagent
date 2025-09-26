@@ -175,3 +175,38 @@ pipelines:
     runner.run_once()
     stage_state = state_store.load_stage_state(HOST_NAME, "%1", "demo", "actions")
     assert stage_state.status.value == "COMPLETED"
+
+
+def test_runner_process_bus_command(state_store, tmp_path):
+    from tmux_agent.local_bus import LocalBus
+
+    agent_config = make_agent_config(tmp_path)
+    policy = make_policy()
+    approval_manager = ApprovalManager(
+        state_store,
+        tmp_path / "approvals",
+        secret="secret",
+    )
+    notifier = MockNotifier()
+    bus = LocalBus(tmp_path / 'bus')
+
+    adapter = FakeTmuxAdapter({"%1": ""})
+    adapter.set_meta("%1", "proj:storyapp", "agent:codex-ci", "codex:ci")
+
+    runtime = HostRuntime(host=agent_config.hosts[0], adapter=adapter)
+    runner = Runner(
+        agent_config=agent_config,
+        policy=policy,
+        state_store=state_store,
+        notifier=notifier,
+        approval_manager=approval_manager,
+        adapters=[runtime],
+        bus=bus,
+        dry_run=False,
+    )
+
+    bus.append_command({"text": "hello orchestrator", "session": "proj:storyapp", "sender": "test"})
+    runner.run_once()
+
+    assert any(blob.startswith('[SENT:hello orchestrator') for blob in adapter._panes.values())
+    assert any(msg.title == '指令已注入' for msg in notifier.sent)

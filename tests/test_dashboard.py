@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -38,6 +39,22 @@ def _seed_state(db_path):
         store.close()
 
 
+def _seed_agent_session(db_path, branch: str, session_name: str) -> None:
+    store = StateStore(db_path)
+    try:
+        store.upsert_agent_session(
+            branch=branch,
+            worktree_path=f"/worktrees/{branch}",
+            session_name=session_name,
+            model="claude-sonnet",
+            template="qa-template",
+            description="检查构建输出",
+            last_prompt="请扫描异常",
+        )
+    finally:
+        store.close()
+
+
 def _install_fake_tmux(monkeypatch, adapter: FakeTmuxAdapter) -> None:
     def _factory(*_args, **_kwargs):
         return adapter
@@ -57,7 +74,7 @@ def test_overview_api(tmp_path, monkeypatch):
     _seed_state(db_path)
     fake = _make_fake_adapter()
     _install_fake_tmux(monkeypatch, fake)
-    app = create_app(DashboardConfig(db_path=db_path))
+    app = create_app(DashboardConfig(db_path=db_path, template_path=TEMPLATE_DIR))
     client = TestClient(app)
 
     response = client.get("/api/overview")
@@ -73,7 +90,7 @@ def test_index_page_renders_state(tmp_path, monkeypatch):
     _seed_state(db_path)
     fake = _make_fake_adapter()
     _install_fake_tmux(monkeypatch, fake)
-    app = create_app(DashboardConfig(db_path=db_path))
+    app = create_app(DashboardConfig(db_path=db_path, template_path=TEMPLATE_DIR))
     client = TestClient(app)
 
     response = client.get("/")
@@ -166,7 +183,7 @@ def test_dashboard_api_includes_stage_and_panes(tmp_path, monkeypatch):
     _seed_state(db_path)
     fake = _make_fake_adapter()
     _install_fake_tmux(monkeypatch, fake)
-    app = create_app(DashboardConfig(db_path=db_path))
+    app = create_app(DashboardConfig(db_path=db_path, template_path=TEMPLATE_DIR))
     client = TestClient(app)
 
     response = client.get("/api/dashboard")
@@ -183,6 +200,27 @@ def test_dashboard_api_includes_stage_and_panes(tmp_path, monkeypatch):
     assert pane_activity["%1"]["status"] in {"RUNNING", "IDLE"}
     assert pane_activity["%1"]["project"] == "others"
     assert "tail_excerpt" in pane_activity["%1"]
+
+
+def test_agent_sessions_reflected_in_dashboard(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    fake = FakeTmuxAdapter({"%10": "booting agent\n"})
+    fake.set_full_meta("%10", session="agent-demo", window="win", title="agent-demo", active=True, width=120, height=30)
+    _install_fake_tmux(monkeypatch, fake)
+    _seed_agent_session(db_path, branch="demo", session_name="agent-demo")
+    app = create_app(DashboardConfig(db_path=db_path, template_path=TEMPLATE_DIR))
+    client = TestClient(app)
+
+    response = client.get("/api/dashboard")
+    assert response.status_code == 200
+    payload = response.json()
+    projects = payload["projects"]
+    assert any(project["name"] == "agents" for project in projects)
+    agent_sessions = payload.get("agent_sessions")
+    assert agent_sessions and agent_sessions[0]["branch"] == "demo"
+    pane_activity = payload["pane_activity"]["%10"]
+    assert pane_activity["project"] == "agents"
+    assert pane_activity["agent_info"]["template"] == "qa-template"
 
 
 def test_pane_summary_endpoint(tmp_path, monkeypatch):
@@ -214,3 +252,4 @@ def test_pane_summary_endpoint(tmp_path, monkeypatch):
     data = response.json()
     assert data["summary"] == "summarized"
     assert data["pane_id"] == "%1"
+TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "src" / "tmux_agent" / "dashboard" / "templates"

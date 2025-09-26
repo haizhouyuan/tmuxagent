@@ -79,6 +79,7 @@ class PaneActivity:
     agent: str | None = None
     project: str = "unknown"
     tail_excerpt: str = ""
+    agent_info: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +96,7 @@ class PaneActivity:
             "agent": self.agent,
             "project": self.project,
             "tail_excerpt": self.tail_excerpt,
+            "agent_info": self.agent_info,
         }
 
 
@@ -158,15 +160,40 @@ def _aggregate_status(statuses: Iterable[PaneStatus]) -> PaneStatus:
 
 
 class PaneStatusAnalyzer:
-    def __init__(self, project_resolver: Callable[[PaneSnapshot], str] | None = None) -> None:
+    def __init__(
+        self,
+        project_resolver: Callable[[PaneSnapshot], str] | None = None,
+        *,
+        agent_sessions: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self._project_resolver = project_resolver or self._default_project
+        self._agent_sessions_by_session: dict[str, dict[str, Any]] = {}
+        self._agent_sessions_by_branch: dict[str, dict[str, Any]] = {}
+        if agent_sessions:
+            self.update_agent_sessions(agent_sessions)
+
+    def update_agent_sessions(self, mapping: dict[str, dict[str, Any]]) -> None:
+        by_session: dict[str, dict[str, Any]] = {}
+        by_branch: dict[str, dict[str, Any]] = {}
+        for key, info in mapping.items():
+            session_name = info.get("session_name")
+            branch = info.get("branch")
+            if session_name:
+                by_session[session_name] = info
+            if branch:
+                by_branch[branch] = info
+        self._agent_sessions_by_session = by_session
+        self._agent_sessions_by_branch = by_branch
 
     def analyze(self, snapshot: PaneSnapshot) -> PaneActivity:
         agent = self._infer_agent(snapshot)
         status, summary, last_event = self._determine_status(snapshot)
         tail_excerpt = self._tail_excerpt(snapshot.lines)
         attention = status in {PaneStatus.ERROR, PaneStatus.WAITING_INPUT}
-        project = self._project_resolver(snapshot)
+        agent_info = self._resolve_agent_info(snapshot)
+        project = "agents" if agent_info else self._project_resolver(snapshot)
+        if agent_info and not summary:
+            summary = agent_info.get("description") or "AI 代理会话"
         return PaneActivity(
             pane_id=snapshot.pane_id,
             session=snapshot.session,
@@ -181,6 +208,7 @@ class PaneStatusAnalyzer:
             agent=agent,
             project=project,
             tail_excerpt=tail_excerpt,
+            agent_info=agent_info,
         )
 
     def build_board(self, snapshots: list[PaneSnapshot]) -> list[SessionActivity]:
@@ -322,6 +350,20 @@ class PaneStatusAnalyzer:
             if key.startswith("points") or "points" in key:
                 return "points"
         return "others"
+
+    def _resolve_agent_info(self, snapshot: PaneSnapshot) -> dict[str, Any] | None:
+        session_name = snapshot.session
+        if session_name and session_name in self._agent_sessions_by_session:
+            return self._agent_sessions_by_session[session_name]
+        title = snapshot.title or ""
+        branch_candidate = None
+        if session_name and session_name.startswith("agent-"):
+            branch_candidate = session_name[len("agent-") :]
+        elif title.startswith("agent-"):
+            branch_candidate = title[len("agent-") :]
+        if branch_candidate and branch_candidate in self._agent_sessions_by_branch:
+            return self._agent_sessions_by_branch[branch_candidate]
+        return None
 
 
 def _contains_any(haystack: str, needles: Iterable[str]) -> bool:

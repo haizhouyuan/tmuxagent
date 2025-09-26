@@ -157,6 +157,38 @@ class TmuxAdapter:
             args.append("C-m")
         self._run(args)
 
+    def pipe_pane(self, pane_id: str, command: str, *, append: bool = True) -> None:
+        args = ["pipe-pane", "-t", pane_id]
+        if append:
+            args.append("-o")
+        args.append(command)
+        self._run(args)
+
+    # Session helpers ---------------------------------------------------
+    def new_session(self, session_name: str, *, start_directory: str | None = None) -> None:
+        args = ["new-session", "-d", "-s", session_name]
+        if start_directory:
+            args += ["-c", start_directory]
+        self._run(args)
+
+    def kill_session(self, session_name: str) -> None:
+        self._run(["kill-session", "-t", session_name])
+
+    def session_exists(self, session_name: str) -> bool:
+        try:
+            self._run(["has-session", "-t", session_name])
+        except subprocess.CalledProcessError:
+            return False
+        return True
+
+    def list_sessions(self) -> list[str]:
+        proc = self._run(["list-sessions", "-F", "#{session_name}"])
+        lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        return lines
+
+    def panes_for_session(self, session_name: str) -> list[PaneInfo]:
+        return [pane for pane in self.list_panes() if pane.session_name == session_name]
+
 
 class FakeTmuxAdapter(TmuxAdapter):
     """Testing double that keeps pane buffers in memory."""
@@ -165,11 +197,16 @@ class FakeTmuxAdapter(TmuxAdapter):
         super().__init__(tmux_bin="tmux")
         self._panes: dict[str, str] = panes or {}
         self._pane_meta: dict[str, tuple[str, str, str, bool, int | None, int | None]] = {}
+        self._sessions: dict[str, list[str]] = {}
+        self._pane_counter = 0
+        self._pipe_commands: dict[str, str] = {}
         for idx, pane in enumerate(self._panes):
             self._pane_meta[pane] = ("sess", f"window{idx}", f"pane{idx}", False, None, None)
+            self._sessions.setdefault("sess", []).append(pane)
 
     def set_meta(self, pane_id: str, session: str, window: str, title: str) -> None:
         self._pane_meta[pane_id] = (session, window, title, False, None, None)
+        self._sessions.setdefault(session, []).append(pane_id)
 
     def set_full_meta(
         self,
@@ -183,6 +220,9 @@ class FakeTmuxAdapter(TmuxAdapter):
         height: int | None = None,
     ) -> None:
         self._pane_meta[pane_id] = (session, window, title, active, width, height)
+        panes = self._sessions.setdefault(session, [])
+        if pane_id not in panes:
+            panes.append(pane_id)
 
     def append_output(self, pane_id: str, text: str) -> None:
         self._panes[pane_id] = self._panes.get(pane_id, "") + text
@@ -213,3 +253,60 @@ class FakeTmuxAdapter(TmuxAdapter):
             suffix = "|".join(keys)
         suffix += "\n" if enter else ""
         self.append_output(pane_id, f"[SENT:{suffix}]")
+
+    def pipe_pane(self, pane_id: str, command: str, *, append: bool = True) -> None:  # noqa: ARG002
+        existing = self._pipe_commands.get(pane_id)
+        if append and existing == command:
+            return
+        self._pipe_commands[pane_id] = command
+        marker = "[PIPE_APPEND]" if append else "[PIPE]"
+        self.append_output(pane_id, f"{marker}{command}\n")
+
+    # Session helpers ---------------------------------------------------
+    def new_session(self, session_name: str, *, start_directory: str | None = None) -> None:  # noqa: ARG002
+        if session_name in self._sessions:
+            raise RuntimeError(f"session {session_name} already exists")
+        pane_id = self._allocate_pane_id()
+        self._sessions[session_name] = [pane_id]
+        self._panes.setdefault(pane_id, "")
+        self._pane_meta[pane_id] = (session_name, "window0", "pane0", True, None, None)
+
+    def kill_session(self, session_name: str) -> None:
+        pane_ids = self._sessions.pop(session_name, [])
+        for pane_id in pane_ids:
+            self._pane_meta.pop(pane_id, None)
+            self._panes.pop(pane_id, None)
+
+    def session_exists(self, session_name: str) -> bool:
+        return session_name in self._sessions
+
+    def list_sessions(self) -> list[str]:
+        return sorted(self._sessions.keys())
+
+    def panes_for_session(self, session_name: str) -> list[PaneInfo]:
+        pane_ids = self._sessions.get(session_name, [])
+        panes: list[PaneInfo] = []
+        for pane_id in pane_ids:
+            if pane_id not in self._pane_meta:
+                continue
+            session, window, title, active, width, height = self._pane_meta[pane_id]
+            panes.append(
+                PaneInfo(
+                    pane_id=pane_id,
+                    session_name=session,
+                    window_name=window,
+                    pane_title=title,
+                    is_active=active,
+                    width=width,
+                    height=height,
+                )
+            )
+        return panes
+
+    def _allocate_pane_id(self) -> str:
+        self._pane_counter += 1
+        pane_id = f"%{self._pane_counter}"
+        while pane_id in self._panes:
+            self._pane_counter += 1
+            pane_id = f"%{self._pane_counter}"
+        return pane_id

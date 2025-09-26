@@ -1,40 +1,83 @@
-principles:
-  - "Automate routine steps; pause for critical approvals."
-
 pipelines:
-  - name: "demo-pipeline"
-    match:
+- match:
+    any_of:
+    - window_name: ^agent:codex-ci$
+  name: demo-pipeline
+  stages:
+  - actions_on_start:
+    - send_keys: npm run lint
+    fail_when:
       any_of:
-        - window_name: "^agent:codex-ci$"
-    stages:
-      - name: "lint"
-        triggers:
-          any_of:
-            - log_regex: "(?i)start lint"
-        actions_on_start:
-          - send_keys: "npm run lint"
-        success_when:
-          any_of:
-            - log_regex: "(?i)0 problems"
-            - message_type: "STATUS"
-        fail_when:
-          any_of:
-            - log_regex: "(?i)error"
-        on_fail:
-          - retry:
-              max: 1
-      - name: "build"
-        triggers:
-          any_of:
-            - after_stage_success: "lint"
-        require_approval: true
-        actions_on_start:
-          - send_keys: "npm run build"
-        success_when:
-          any_of:
-            - log_regex: "(?i)Build complete"
-        fail_when:
-          any_of:
-            - log_regex: "(?i)failed"
-        on_fail:
-          - ask_human: "Build failed, decide next step"
+      - log_regex: (?i)error
+    name: lint
+    on_fail:
+    - retry:
+        max: 1
+    on_fail_notify:
+      body: '阶段 **lint** 执行失败
+
+
+        管道: demo-pipeline
+
+        错误: {error_message}
+
+        时间: {timestamp}'
+      title: ❌ lint 失败
+    on_success_notify:
+      body: '阶段 **lint** 已成功完成
+
+
+        管道: demo-pipeline
+
+        时间: {timestamp}'
+      title: ✅ lint 完成
+    success_when:
+      any_of:
+      - log_regex: (?i)0 problems
+      - message_type: STATUS
+    triggers:
+      any_of:
+      - log_regex: (?i)start lint
+  - actions_on_start:
+    - send_keys: npm run build
+    fail_when:
+      any_of:
+      - log_regex: (?i)failed
+    name: build
+    on_fail:
+    - ask_human: Build failed, decide next step
+    on_fail_notify:
+      body: '阶段 **build** 执行失败
+
+
+        管道: demo-pipeline
+
+        错误: {error_message}
+
+        时间: {timestamp}'
+      title: ❌ build 失败
+    on_start_notify:
+      body: '阶段 **build** 正在等待人工审批
+
+
+        管道: demo-pipeline
+
+        时间: {timestamp}'
+      title: 🔔 demo-pipeline - build 需要审批
+    on_success_notify:
+      body: '阶段 **build** 已成功完成
+
+
+        管道: demo-pipeline
+
+        时间: {timestamp}'
+      title: ✅ build 完成
+    require_approval: true
+    success_when:
+      any_of:
+      - log_regex: (?i)Build complete
+    triggers:
+      any_of:
+      - after_stage_success: lint
+principles:
+- Automate routine steps; pause for critical approvals.

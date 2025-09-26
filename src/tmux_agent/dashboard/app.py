@@ -101,7 +101,19 @@ def create_app(config: DashboardConfig) -> FastAPI:
             "captured_at": snap.captured_at.isoformat(),
             "tail_excerpt": tail_excerpt,
             "tail_preview": preview_lines,
+            "agent_info": None,
         }
+
+    def load_agent_sessions(provider: DashboardDataProvider) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        rows = provider.agent_sessions()
+        payload = [row.to_dict() for row in rows]
+        lookup = {}
+        for item in payload:
+            session_name = item.get("session_name")
+            if session_name:
+                lookup[session_name] = item
+        pane_analyzer.update_agent_sessions(lookup)
+        return payload, lookup
 
     def write_decision(host: str, pane_id: str, stage: str, decision: str) -> None:
         store = StateStore(config.db_path)
@@ -132,11 +144,16 @@ def create_app(config: DashboardConfig) -> FastAPI:
         provider: DashboardDataProvider = Depends(get_provider),
     ) -> HTMLResponse:
         snapshots = pane_service.snapshots()
+        agent_sessions_payload, agent_lookup = load_agent_sessions(provider)
         board = pane_analyzer.build_board(snapshots)
         pane_payload = [serialize_pane_snapshot(snap) for snap in snapshots]
         board_payload = [session.to_dict() for session in board]
         activities = _flatten_activity(board)
         projects = _group_by_project(board)
+        for snap_payload in pane_payload:
+            activity = activities.get(snap_payload["pane_id"])
+            if activity and activity.get("agent_info"):
+                snap_payload["agent_info"] = activity.get("agent_info")
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -145,6 +162,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
                 "projects": projects,
                 "pane_activity": activities,
                 "panes": pane_payload,
+                "agent_sessions": agent_sessions_payload,
                 "capture_lines": config.capture_lines,
             },
         )
@@ -180,8 +198,12 @@ def create_app(config: DashboardConfig) -> FastAPI:
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/api/panes")
-    def panes(provider: PaneService = Depends(get_pane_service)) -> list[dict[str, Any]]:
-        snapshots = provider.snapshots()
+    def panes(
+        pane_service: PaneService = Depends(get_pane_service),
+        data_provider: DashboardDataProvider = Depends(get_provider),
+    ) -> list[dict[str, Any]]:
+        snapshots = pane_service.snapshots()
+        load_agent_sessions(data_provider)
         board = pane_analyzer.build_board(snapshots)
         activity_map = _flatten_activity(board)
         items: list[dict[str, Any]] = []
@@ -191,16 +213,23 @@ def create_app(config: DashboardConfig) -> FastAPI:
             payload["preview"] = preview
             payload["activity"] = activity_map.get(snap.pane_id)
             payload["tail_excerpt"] = payload.get("tail_excerpt") or "\n".join(preview).rstrip()
+            if payload["activity"] and payload["activity"].get("agent_info"):
+                payload["agent_info"] = payload["activity"].get("agent_info")
             items.append(payload)
         return items
 
     @app.get("/api/panes/{pane_id}/tail")
-    def pane_tail(pane_id: str, provider: PaneService = Depends(get_pane_service)) -> dict[str, Any]:
-        capture = provider.capture(pane_id)
+    def pane_tail(
+        pane_id: str,
+        pane_service: PaneService = Depends(get_pane_service),
+        data_provider: DashboardDataProvider = Depends(get_provider),
+    ) -> dict[str, Any]:
+        capture = pane_service.capture(pane_id)
         lines = capture.content.splitlines()
-        pane_meta = next((pane for pane in provider.list_panes() if pane.pane_id == pane_id), None)
+        pane_meta = next((pane for pane in pane_service.list_panes() if pane.pane_id == pane_id), None)
         snapshot = None
-        for candidate in provider.snapshots():
+        load_agent_sessions(data_provider)
+        for candidate in pane_service.snapshots():
             if candidate.pane_id == pane_id:
                 snapshot = candidate
                 break
@@ -228,6 +257,8 @@ def create_app(config: DashboardConfig) -> FastAPI:
             )
         if activity_dict:
             meta["activity"] = activity_dict
+            if activity_dict.get("agent_info"):
+                meta["agent_info"] = activity_dict["agent_info"]
         return meta
 
     @app.post("/api/panes/{pane_id}/summary")
@@ -295,8 +326,10 @@ def create_app(config: DashboardConfig) -> FastAPI:
     @app.get("/api/dashboard")
     def dashboard_state(
         panes: PaneService = Depends(get_pane_service),
+        data_provider: DashboardDataProvider = Depends(get_provider),
     ) -> dict[str, Any]:
         snapshots = panes.snapshots()
+        agent_sessions_payload, agent_lookup = load_agent_sessions(data_provider)
         board = pane_analyzer.build_board(snapshots)
         board_payload = [session.to_dict() for session in board]
         activity_map = _flatten_activity(board)
@@ -305,7 +338,18 @@ def create_app(config: DashboardConfig) -> FastAPI:
             "board": board_payload,
             "projects": projects,
             "pane_activity": activity_map,
-            "panes": [serialize_pane_snapshot(snap) for snap in snapshots],
+            "agent_sessions": agent_sessions_payload,
+            "panes": [
+                {
+                    **serialize_pane_snapshot(snap),
+                    "agent_info": (
+                        activity_map.get(snap.pane_id, {}).get("agent_info")
+                        if activity_map.get(snap.pane_id)
+                        else None
+                    ),
+                }
+                for snap in snapshots
+            ],
         }
 
     return app

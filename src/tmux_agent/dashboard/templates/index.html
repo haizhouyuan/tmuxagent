@@ -344,6 +344,27 @@
         align-items: center;
         gap: 0.25rem;
       }
+      .pane-meta-info .pane-agent {
+        background: rgba(37, 99, 235, 0.12);
+        color: #1d4ed8;
+        padding: 0.18rem 0.45rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 600;
+      }
+      body.dark .pane-meta-info .pane-agent {
+        background: rgba(59, 130, 246, 0.28);
+        color: #dbeafe;
+      }
+      .board-pane-agent {
+        font-size: 0.72rem;
+        color: #1d4ed8;
+        margin-top: 0.2rem;
+        background: rgba(37, 99, 235, 0.08);
+        display: inline-flex;
+        padding: 0.2rem 0.45rem;
+        border-radius: 0.45rem;
+      }
       .pane-controls {
         display: flex;
         gap: 0.35rem;
@@ -599,9 +620,14 @@
                     <span class="pane-window">Window: {{ pane.window or '—' }}</span>
                     <span class="pane-id">Pane: {{ pane.pane_id }}</span>
                     <span class="pane-size{% if not (pane.width and pane.height) %} hidden{% endif %}">{% if pane.width and pane.height %}Size: {{ pane.width }}×{{ pane.height }}{% endif %}</span>
-                    {% if pane.is_active %}
-                      <span class="active-indicator">● 活跃</span>
-                    {% endif %}
+                    <span class="pane-agent{% if not (activity and activity.agent_info) %} hidden{% endif %}">
+                      {% if activity and activity.agent_info %}
+                        Agent: {{ activity.agent_info.branch }}{% if activity.agent_info.template %} · {{ activity.agent_info.template }}{% endif %}{% if activity.agent_info.model %} · {{ activity.agent_info.model }}{% endif %}
+                      {% endif %}
+                    </span>
+                  {% if pane.is_active %}
+                    <span class="active-indicator">● 活跃</span>
+                  {% endif %}
                   </div>
                   <div class="pane-summary" data-pane-summary>{{ activity.summary if activity else '' }}</div>
                 </header>
@@ -661,6 +687,7 @@
             <span class="pane-window"></span>
             <span class="pane-id"></span>
             <span class="pane-size hidden"></span>
+            <span class="pane-agent hidden"></span>
           </div>
           <div class="pane-summary" data-pane-summary></div>
         </header>
@@ -699,7 +726,8 @@
         board: {{ board | tojson }},
         projects: {{ projects | tojson }},
         pane_activity: {{ pane_activity | tojson }},
-        panes: {{ panes | tojson }}
+        panes: {{ panes | tojson }},
+        agent_sessions: {{ agent_sessions | tojson }}
       };
       window.captureLines = {{ capture_lines }};
     </script>
@@ -723,6 +751,7 @@
       let paneActivityStore = new Map(Object.entries(window.dashboardBootstrap.pane_activity || {}));
       let projectStore = window.dashboardBootstrap.projects || [];
       const paneSummaryCache = new Map();
+      let agentSessionStore = window.dashboardBootstrap.agent_sessions || [];
       const refreshIntervalMs = 3000;
       let refreshTimer = null;
       let autoRefreshEnabled = true;
@@ -759,6 +788,23 @@
       }
 
       let focusedPaneId = null;
+
+      function formatAgentInfo(info) {
+        if (!info) {
+          return '';
+        }
+        const parts = [];
+        if (info.branch) {
+          parts.push(info.branch);
+        }
+        if (info.template) {
+          parts.push(`模板:${info.template}`);
+        }
+        if (info.model) {
+          parts.push(`模型:${info.model}`);
+        }
+        return parts.join(' · ');
+      }
 
       function renderBoard(projects) {
         boardContainer.innerHTML = '';
@@ -854,8 +900,21 @@
                 }
                 const paneMeta = document.createElement('div');
                 paneMeta.className = 'board-pane-meta';
-                paneMeta.textContent = `${pane.session}/${pane.window}`;
+                const metaParts = [`${pane.session}/${pane.window}`];
+                if (pane.agent_info) {
+                  const agentStr = formatAgentInfo(pane.agent_info);
+                  if (agentStr) {
+                    metaParts.push(agentStr);
+                  }
+                }
+                paneMeta.textContent = metaParts.join(' · ');
                 paneMain.appendChild(paneMeta);
+                if (pane.agent_info && pane.agent_info.description) {
+                  const agentDesc = document.createElement('div');
+                  agentDesc.className = 'board-pane-agent';
+                  agentDesc.textContent = pane.agent_info.description;
+                  paneMain.appendChild(agentDesc);
+                }
                 paneRow.appendChild(paneMain);
 
                 const actions = document.createElement('div');
@@ -1002,6 +1061,18 @@
             }
           } else if (existingIndicator) {
             existingIndicator.remove();
+          }
+          const agentSpan = metaEl.querySelector('.pane-agent');
+          const activity = paneActivityStore.get(pane.pane_id);
+          const agentInfo = pane.agent_info || (activity && activity.agent_info) || null;
+          if (agentSpan) {
+            if (agentInfo) {
+              agentSpan.textContent = `Agent: ${formatAgentInfo(agentInfo)}`;
+              agentSpan.classList.remove('hidden');
+            } else {
+              agentSpan.textContent = '';
+              agentSpan.classList.add('hidden');
+            }
           }
         }
 
@@ -1151,6 +1222,7 @@
           }
           const data = await response.json();
           projectStore = data.projects || [];
+          agentSessionStore = data.agent_sessions || [];
           renderBoard(projectStore);
           paneActivityStore = new Map(Object.entries(data.pane_activity || {}));
           syncPaneGrid(data.panes || []);

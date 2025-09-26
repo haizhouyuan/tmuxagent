@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Any
 from typing import Iterable
 
 import re
@@ -14,7 +15,9 @@ from .approvals import ApprovalManager
 from .config import AgentConfig
 from .config import HostConfig
 from .config import PolicyConfig
+from .local_bus import LocalBus
 from .notify import Notifier
+from .notify import NotificationMessage
 from .parser import parse_messages
 from .policy import EvaluationOutcome
 from .policy import PolicyEngine
@@ -45,6 +48,7 @@ class Runner:
         notifier: Notifier,
         approval_manager: ApprovalManager,
         adapters: Iterable[HostRuntime],
+        bus: LocalBus | None = None,
         dry_run: bool = False,
     ) -> None:
         self.agent_config = agent_config
@@ -53,6 +57,7 @@ class Runner:
         self.notifier = notifier
         self.approval_manager = approval_manager
         self.adapters = list(adapters)
+        self.bus = bus
         self.dry_run = dry_run
         self.policy_engine = PolicyEngine(policy, state_store, approval_manager)
 
@@ -78,6 +83,8 @@ class Runner:
 
     def run_once(self) -> None:
         self.state_store.expire_tokens()
+        if self.bus:
+            self._process_bus_commands()
         for runtime in self.adapters:
             panes = runtime.adapter.list_panes()
             for pane in panes:
@@ -88,6 +95,15 @@ class Runner:
                     runtime.host.tmux.capture_lines,
                 )
                 new_lines = self._diff_pane(runtime.name, pane, capture)
+                if new_lines:
+                    agent_record = self.state_store.find_agent_by_session(pane.session_name)
+                    if agent_record:
+                        snippet = "\n".join(new_lines[-20:])
+                        self.state_store.update_agent_runtime(
+                            agent_record["branch"],
+                            status="running",
+                            last_output=snippet,
+                        )
                 messages = parse_messages(new_lines) if new_lines else []
                 outcome = self.policy_engine.evaluate(runtime.name, pane, new_lines, messages)
                 self._handle_outcome(runtime, pane, outcome)
@@ -112,6 +128,73 @@ class Runner:
         if not new_slice:
             return []
         return new_slice.splitlines()
+
+    def _process_bus_commands(self) -> None:
+        offset = self.state_store.get_bus_offset('commands')
+        commands, new_offset = self.bus.read_commands(offset) if self.bus else ([], offset)
+        if not commands:
+            return
+        for payload in commands:
+            try:
+                self._execute_command(payload)
+            except Exception as exc:  # pragma: no cover - defensive
+                self._notify_error(f"命令执行失败: {payload}", exc)
+        if self.bus and new_offset != offset:
+            self.state_store.set_bus_offset('commands', new_offset)
+
+    def _execute_command(self, payload: dict[str, Any]) -> None:
+        text = (payload.get('text') or payload.get('command') or '').strip()
+        if not text:
+            return
+        target_host = payload.get('host')
+        session = payload.get('session')
+        pane_id = payload.get('pane_id')
+        enter = payload.get('enter', True)
+        runtime: HostRuntime | None = None
+        if target_host:
+            for candidate in self.adapters:
+                if candidate.name == target_host:
+                    runtime = candidate
+                    break
+        if runtime is None and self.adapters:
+            runtime = self.adapters[0]
+        if runtime is None:
+            raise RuntimeError('no tmux adapter available for command execution')
+
+        pane_target = None
+        if pane_id:
+            pane_target = pane_id
+        elif session:
+            panes = runtime.adapter.panes_for_session(session)
+            if panes:
+                pane_target = panes[0].pane_id
+        else:
+            panes = runtime.adapter.list_panes()
+            if panes:
+                pane_target = panes[0].pane_id
+        if not pane_target:
+            raise RuntimeError(f"未找到可用窗格用于执行命令 (session={session!r})")
+
+        if not self.dry_run:
+            runtime.adapter.send_keys(pane_target, text, enter=enter)
+
+        self.notifier.send(
+            NotificationMessage(
+                title='指令已注入',
+                body=f"{payload.get('sender', 'local')} -> {session or pane_target}: {text}",
+            )
+        )
+
+    def _notify_error(self, context: str, exc: Exception) -> None:
+        try:
+            self.notifier.send(
+                NotificationMessage(
+                    title='命令处理异常',
+                    body=f"{context}\n{exc}",
+                )
+            )
+        except Exception:  # pragma: no cover - avoid cascading failures
+            pass
 
     def _handle_outcome(self, runtime: HostRuntime, pane: PaneInfo, outcome: EvaluationOutcome) -> None:
         for request in outcome.approvals:

@@ -82,6 +82,7 @@ class AgentConfig(BaseModel):
     tmux_bin: str = "tmux"
     sqlite_path: Path = Path("~/.tmux_agent/state.db")
     approval_dir: Path = Path("~/.tmux_agent/approvals")
+    bus_dir: Path = Path("~/.tmux_agent/bus")
     notify_channel: str = Field(default="stdout", alias="notify")
     hosts: list[HostConfig] = Field(default_factory=list)
 
@@ -102,6 +103,8 @@ class AgentConfig(BaseModel):
     def expanded_approval_dir(self) -> Path:
         return self.approval_dir.expanduser()
 
+    def expanded_bus_dir(self) -> Path:
+        return self.bus_dir.expanduser()
 
 def load_yaml(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:

@@ -56,3 +56,6 @@ where = ["src"]
 
 [project.scripts]
 tmux-agent-dashboard = "tmux_agent.dashboard.cli:main"
+tmux-agent = "tmux_agent.agent_cli:main"
+tmux-agent-notify-relay = "tmux_agent.notify_bridge:main"
+tmux-agent-orchestrator = "tmux_agent.orchestrator_cli:main"
