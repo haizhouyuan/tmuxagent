@@ -81,8 +81,8 @@ def test_wecom_app_missing_env(monkeypatch):
     ]:
         monkeypatch.delenv(key, raising=False)
     notifier = Notifier(channel="wecom_app")
-    with pytest.raises(RuntimeError):
-        notifier.send(NotificationMessage(title="T", body="B"))
+    notifier.send(NotificationMessage(title="T", body="B"))
+    assert "wecom_app" in notifier._disabled_channels
 
 
 def test_wecom_app_token_error(monkeypatch):
@@ -162,3 +162,10 @@ def test_multi_channel_includes_bus(tmp_path, monkeypatch):
     assert '复合通知' in sent
     records = bus.recent_notifications(limit=5)
     assert any(rec['title'] == '复合通知' for rec in records)
+
+
+def test_wecom_channel_missing_env(monkeypatch):
+    monkeypatch.delenv('WECOM_WEBHOOK', raising=False)
+    notifier = Notifier(channel='wecom')
+    notifier.send(NotificationMessage(title='T', body='B'))
+    assert 'wecom' in notifier._disabled_channels

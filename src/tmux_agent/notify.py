@@ -1,6 +1,7 @@
 """Notification adapters."""
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ from typing import Sequence
 import httpx
 
 from .local_bus import LocalBus
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -30,6 +34,7 @@ class Notifier:
         self.bus = bus
         self._wecom_app_token: str | None = None
         self._wecom_app_token_expiry: float = 0.0
+        self._disabled_channels: set[str] = set()
 
     def send(self, message: NotificationMessage) -> None:
         for channel in self.channels:
@@ -37,6 +42,8 @@ class Notifier:
 
     # Dispatch helpers -----------------------------------------------------
     def _dispatch(self, channel: str, message: NotificationMessage) -> None:
+        if channel in self._disabled_channels:
+            return
         if channel == "stdout":
             print(f"[NOTIFY] {message.title}\n{message.body}")
             return
@@ -82,7 +89,8 @@ class Notifier:
     def _send_wecom(self, message: NotificationMessage) -> None:
         webhook = os.getenv("WECOM_WEBHOOK", "").strip()
         if not webhook:
-            raise RuntimeError("WECOM_WEBHOOK environment variable not set")
+            self._disable_channel_once("wecom", "WECOM_WEBHOOK environment variable not set")
+            return
         payload = {
             "msgtype": "markdown",
             "markdown": {
@@ -98,7 +106,11 @@ class Notifier:
         agent_id = os.getenv("WECOM_AGENT_ID", "").strip()
         app_secret = os.getenv("WECOM_APP_SECRET", "").strip()
         if not corp_id or not agent_id or not app_secret:
-            raise RuntimeError("WECOM_CORP_ID, WECOM_AGENT_ID, and WECOM_APP_SECRET must be set")
+            self._disable_channel_once(
+                "wecom_app",
+                "WECOM_CORP_ID, WECOM_AGENT_ID, and WECOM_APP_SECRET must be set",
+            )
+            return
 
         touser = os.getenv("WECOM_TOUSER")
         if touser is None or not touser.strip():
@@ -150,6 +162,12 @@ class Notifier:
         self._wecom_app_token = token
         self._wecom_app_token_expiry = now + max(expires_in - 60, 60)
         return token
+
+    def _disable_channel_once(self, channel: str, reason: str) -> None:
+        if channel in self._disabled_channels:
+            return
+        logger.warning("Notification channel '%s' disabled: %s", channel, reason)
+        self._disabled_channels.add(channel)
 
 
 class MockNotifier(Notifier):

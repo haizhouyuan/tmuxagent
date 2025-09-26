@@ -10,6 +10,54 @@
 - Prometheus/Grafana 可选（本地主机即可）。
 - 企业微信或 Slack 测试机器人，用于通知闭环。
 
+## 环境准备（务必先执行）
+1. **统一配置 `.env`**（建议放在 `~/.env`）：
+   ```bash
+   HTTP_PROXY=http://127.0.0.1:7890
+   HTTPS_PROXY=http://127.0.0.1:7890
+   ALL_PROXY=socks5://127.0.0.1:7890  # 如使用 SOCKS5 代理
+   NO_PROXY=localhost,127.0.0.1,::1,.local,.lan
+
+   OPENAI_API_KEY=sk-xxx_your_key
+   CODEX_MODEL=gpt-5-codex
+   CODEX_TIMEOUT_SECONDS=120
+
+   WECOM_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=替换为真实Key
+   # 如需企业微信应用消息，请设置：
+   WECOM_CORP_ID=wwxxxx
+   WECOM_AGENT_ID=1000002
+   WECOM_APP_SECRET=xxxx
+   ```
+
+2. **加载环境并刷新 tmux server**：
+   ```bash
+   set -a && source ~/.env && set +a
+   tmux kill-server 2>/dev/null || true
+   ```
+
+3. **确保 `codex` 可执行**（真实或 Fake 版本）：
+   ```bash
+   mkdir -p ~/.local/bin
+   cp /path/to/codex ~/.local/bin/codex && chmod +x ~/.local/bin/codex
+   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+   source ~/.bashrc
+   which codex && codex --version
+   ```
+   > 若暂时没有真实 CLI，可在 `.tmuxagent/bin/` 放置 FakeCodex（只需输出 `__TMUXAGENT_RESULT ... 0`），用于打通链路。
+
+4. **Webhook 自检**：
+   ```bash
+   curl -sS -X POST "$WECOM_WEBHOOK" \
+     -H 'Content-Type: application/json' \
+     -d '{"msgtype":"text","text":{"content":"[Orchestrator] webhook ready"}}'
+   ```
+
+5. **运行诊断脚本**（建议保存为 `scripts/diagnose_orchestrator.sh`）：
+   ```bash
+   ./scripts/diagnose_orchestrator.sh
+   ```
+   该脚本会校验代理、API Key、Webhook、codex 与 `/metrics` 端口；全部通过后再进入正式测试。
+
 ## 预备步骤
 1. **同步代码**
    ```bash
@@ -102,4 +150,3 @@
 - 企业微信/Slack 通知链路与批准机制运作正常。
 - Replay 工具能输出完整命令历史，未出现缺失条目。
 - 全量 pytest 通过。
-

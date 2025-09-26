@@ -9,3 +9,6 @@ __pycache__/
 .vscode/
 hosts.yaml
 policy.yaml
+
+# Ignore local secrets directory
+secrets/

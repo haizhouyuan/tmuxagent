@@ -81,15 +81,21 @@ class CodexClient:
         return {"LC_ALL": "en_US.UTF-8"}
 
     def _run_cli(self, prompt: str) -> str:
-        proc = subprocess.run(
-            self._executable,
-            input=prompt,
-            env={**self._env, **self._default_env()},
-            text=True,
-            capture_output=True,
-            timeout=self._timeout,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                self._executable,
+                input=prompt,
+                env={**self._env, **self._default_env()},
+                text=True,
+                capture_output=True,
+                timeout=self._timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:  # pragma: no cover - requires missing binary
+            raise CodexError(
+                "Codex executable not found. 请确认已安装 codex CLI 并在 PATH 中可访问，"
+                "或在 orchestrator 配置中指定正确的 codex.bin 路径。"
+            ) from exc
         if proc.returncode != 0:
             raise CodexError(
                 f"Codex CLI failed with code {proc.returncode}: {proc.stderr.strip()}"
