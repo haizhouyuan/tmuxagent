@@ -9,6 +9,11 @@ from typing import Mapping
 from typing import Sequence
 
 
+class CodexError(RuntimeError):
+    """Raised when Codex CLI execution or parsing fails."""
+
+
+
 @dataclass(frozen=True)
 class CommandSuggestion:
     """Parsed command suggestion emitted by the orchestrator."""
@@ -49,6 +54,28 @@ class CodexClient:
     def run(self, prompt: str) -> OrchestratorDecision:
         """Execute Codex CLI and parse the JSON response."""
 
+        stdout = self._run_cli(prompt)
+        return self._parse_json(stdout)
+
+    def run_summary(self, prompt: str) -> str:
+        """Invoke Codex to obtain a textual/JSON summary."""
+
+        stdout = self._run_cli(prompt)
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError:
+            # Allow raw text summaries (fallback)
+            return stdout.strip()
+        summary = data.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+        raise CodexError("Codex summary response missing 'summary' field")
+
+    @staticmethod
+    def _default_env() -> Mapping[str, str]:
+        return {"LC_ALL": "en_US.UTF-8"}
+
+    def _run_cli(self, prompt: str) -> str:
         proc = subprocess.run(
             self._executable,
             input=prompt,
@@ -59,14 +86,10 @@ class CodexClient:
             check=False,
         )
         if proc.returncode != 0:
-            raise RuntimeError(
+            raise CodexError(
                 f"Codex CLI failed with code {proc.returncode}: {proc.stderr.strip()}"
             )
-        return self._parse_json(proc.stdout)
-
-    @staticmethod
-    def _default_env() -> Mapping[str, str]:
-        return {"LC_ALL": "en_US.UTF-8"}
+        return proc.stdout
 
     @staticmethod
     def _parse_json(payload: str) -> OrchestratorDecision:
@@ -107,3 +130,11 @@ class FakeCodexClient(CodexClient):  # pragma: no cover - testing utility
         if not self._decisions:
             raise RuntimeError("No fake decisions remaining")
         return self._decisions.pop(0)
+
+    def run_summary(self, prompt: str) -> str:  # type: ignore[override]
+        # When used in tests without explicit summary decisions, fall back to static text.
+        if self._decisions:
+            decision = self._decisions[0]
+            if decision.summary:
+                return decision.summary
+        return ""

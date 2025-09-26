@@ -70,7 +70,11 @@ class OrchestratorService:
 
     def run_once(self) -> None:
         snapshots = self._collect_snapshots()
+        now_ts = int(time.time())
         for snapshot in snapshots:
+            self._update_heartbeat(snapshot, now_ts)
+            self._maybe_rotate_log(snapshot.record.log_path)
+            self._maybe_generate_summary(snapshot)
             if not self._should_process(snapshot.branch):
                 continue
             prompt = self._render_prompt(snapshot)
@@ -101,6 +105,51 @@ class OrchestratorService:
         lines = data.splitlines()
         return "\n".join(lines[-self.config.history_lines :])
 
+    def _maybe_rotate_log(self, log_path: Optional[Path]) -> None:
+        if not log_path or not log_path.exists():
+            return
+        try:
+            data = log_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        lines = data.splitlines()
+        max_lines = self.config.history_lines * 10
+        keep_lines = self.config.history_lines * 5
+        if len(lines) <= max_lines:
+            return
+        archive = log_path.with_suffix(log_path.suffix + ".archive")
+        try:
+            archive.write_text("\n".join(lines[:-keep_lines]) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+        log_path.write_text("\n".join(lines[-keep_lines:]) + "\n", encoding="utf-8")
+
+    def _maybe_generate_summary(self, snapshot: AgentSnapshot) -> None:
+        summary_prompt_path = self.config.prompts.summary
+        if not summary_prompt_path or not summary_prompt_path.exists():
+            return
+        prompt_template = summary_prompt_path.read_text(encoding="utf-8")
+        summary_prompt = prompt_template.format(
+            branch=snapshot.branch,
+            session=snapshot.session,
+            log_excerpt=snapshot.log_excerpt,
+            metadata=json.dumps(snapshot.metadata, ensure_ascii=False, indent=2),
+        )
+        try:
+            summary_text = self.codex.run_summary(summary_prompt)
+        except Exception as exc:  # pragma: no cover - summarization best effort
+            logger.debug("Summary generation failed for %s: %s", snapshot.branch, exc)
+            return
+        existing = snapshot.metadata.get("history_summaries")
+        if isinstance(existing, list):
+            history = existing[-9:] + [summary_text]
+        else:
+            history = [summary_text]
+        self.agent_service.update_status(
+            snapshot.branch,
+            metadata={"history_summaries": history},
+        )
+
     def _render_prompt(self, snapshot: AgentSnapshot) -> str:
         command_template = self.config.prompts.command.read_text(encoding="utf-8")
         summary_template = (
@@ -128,7 +177,10 @@ class OrchestratorService:
             self.agent_service.update_status(
                 snapshot.branch,
                 status="orchestrated",
-                metadata={"orchestrator_summary": decision.summary},
+                metadata={
+                    "orchestrator_summary": decision.summary,
+                    "orchestrator_last_command": [cmd.text for cmd in decision.commands],
+                },
             )
         if decision.has_commands:
             sent = 0
@@ -158,6 +210,12 @@ class OrchestratorService:
         self.agent_service.update_status(
             snapshot.branch,
             metadata={"orchestrator_error": message},
+        )
+
+    def _update_heartbeat(self, snapshot: AgentSnapshot, now_ts: int) -> None:
+        self.agent_service.update_status(
+            snapshot.branch,
+            metadata={"orchestrator_heartbeat": now_ts},
         )
 
     def _should_process(self, branch: str) -> bool:

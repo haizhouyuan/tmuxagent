@@ -53,13 +53,15 @@ def test_orchestrator_injects_commands(tmp_path):
 
     prompt_path = tmp_path / "command.md"
     prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_text("{{ \"summary\": \"auto-summary\" }}", encoding="utf-8")
 
     config = OrchestratorConfig(
         poll_interval=0.1,
         cooldown_seconds=10.0,
         max_commands_per_cycle=2,
         history_lines=5,
-        prompts=PromptConfig(command=prompt_path, summary=None),
+        prompts=PromptConfig(command=prompt_path, summary=summary_path),
         codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
         notify_only_on_confirmation=True,
     )
@@ -96,7 +98,10 @@ def test_orchestrator_injects_commands(tmp_path):
 
         session = store.get_agent_session("storyapp/feature-x")
         assert session is not None
-        assert session["metadata"].get("orchestrator_summary") == "ok"
+        metadata = session["metadata"]
+        assert metadata.get("orchestrator_summary") == "ok"
+        assert "orchestrator_heartbeat" in metadata
+        assert metadata.get("history_summaries") == ["ok"]
 
         notifications = _read_jsonl(bus.notifications_path)
         assert notifications, "notification should be written"
