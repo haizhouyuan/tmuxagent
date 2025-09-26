@@ -18,13 +18,13 @@ Log excerpt:
 ```
 
 Respond ONLY with JSON using this schema:
-{
+{{
   "summary": "Concise status summary (string)",
   "commands": [
-    {"text": "command to execute", "session": "optional session override", "enter": true}
+    {{"text": "command to execute", "session": "optional session override", "enter": true}}
   ],
   "notify": "Optional message for WeCom if human attention needed",
   "requires_confirmation": true
-}
+}}
 
 If no action required, set "commands" to [] and "requires_confirmation" to false.
