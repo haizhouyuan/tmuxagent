@@ -46,5 +46,13 @@ def test_portal_notifications_and_commands(tmp_path):
     commands, _ = bus.read_commands(0)
     assert any(cmd["text"] == "hello orchestrator" for cmd in commands)
 
+    resp = client.post(
+        "/api/confirmations",
+        json={"branch": "storyapp/feature", "action": "approve", "command": "echo hi"},
+    )
+    assert resp.status_code == 200
+    confirmations, _ = bus.read_confirmations(0)
+    assert confirmations[-1]["action"] == "approve"
+
     resp = client.get("/api/sessions")
     assert resp.status_code == 200

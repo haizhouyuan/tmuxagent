@@ -100,12 +100,17 @@ def create_app(*, config: AgentConfig, bus: LocalBus, auth_token: str | None = N
   <style>
     body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin:0; background:#0f172a; color:#f8fafc; }
     header { padding:16px; text-align:center; font-size:1.1rem; background:#1e293b; position:sticky; top:0; z-index:1; }
+    #orchestrator-overview { padding:16px; border-bottom:1px solid rgba(148,163,184,0.25); }
+    #orchestrator-overview .grid { display:grid; gap:12px; }
+    @media (min-width: 680px) { #orchestrator-overview .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    @media (min-width: 980px) { #orchestrator-overview .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }}
     #session-details { padding:16px; max-height:32vh; overflow-y:auto; border-bottom:1px solid rgba(148,163,184,0.25); }
     #notifications { padding:16px; max-height:40vh; overflow-y:auto; }
     #session-details pre { background:#0f172a; padding:12px; border-radius:10px; white-space:pre-wrap; word-break:break-word; }
     .card { background:#1f2937; margin-bottom:12px; padding:12px; border-radius:12px; box-shadow:0 8px 16px rgba(15,23,42,0.3); }
     .card h3 { margin:0 0 8px; font-size:1rem; color:#38bdf8; }
     .card time { display:block; font-size:0.75rem; color:#cbd5f5; margin-bottom:6px; }
+    .tag { display:inline-block; padding:2px 6px; margin-right:4px; border-radius:6px; font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; }
     form { position:fixed; bottom:0; left:0; right:0; background:#1e293b; padding:12px; display:flex; gap:8px; align-items:center; }
     input, select { flex:1; padding:10px; border-radius:10px; border:none; background:#111827; color:#e2e8f0; }
     button { padding:10px 16px; border:none; border-radius:10px; background:#38bdf8; color:#0f172a; font-weight:600; }
@@ -115,6 +120,7 @@ def create_app(*, config: AgentConfig, bus: LocalBus, auth_token: str | None = N
 </head>
 <body>
   <header>tmux Agent 控制台</header>
+  <section id="orchestrator-overview"></section>
   <section id="session-details"></section>
   <section id="notifications"></section>
   <form id="command-form">
@@ -133,6 +139,7 @@ const formEl = document.getElementById('command-form');
 const inputEl = document.getElementById('command-input');
 const sessionEl = document.getElementById('session-select');
 const sessionDetailEl = document.getElementById('session-details');
+const orchestratorEl = document.getElementById('orchestrator-overview');
 
 sessionEl.innerHTML = '<option value="">(加载中…)</option>';
 sessionDetailEl.innerHTML = '<article class="card"><div>会话信息加载中…</div></article>';
@@ -183,6 +190,11 @@ function renderSessionDetail(sessionName) {
   const blockers = Array.isArray(metadata.blockers) && metadata.blockers.length
     ? escapeHtml(metadata.blockers.join('\n'))
     : '';
+  const depends = Array.isArray(metadata.depends_on) && metadata.depends_on.length
+    ? escapeHtml(metadata.depends_on.join(', '))
+    : '';
+  const pendingHtml = formatPendingList(metadata.pending_confirmation);
+  const summariesHtml = formatSummaries(metadata.history_summaries);
   const metadataDump = escapeHtml(JSON.stringify(metadata, null, 2));
   const body = info.last_output ? `<pre>${escapeHtml(info.last_output)}</pre>` : '<div>暂无输出</div>';
   const logLine = logPath ? `<div>日志：${logPath}</div>` : '';
@@ -197,16 +209,87 @@ function renderSessionDetail(sessionName) {
       <div>模型：${model}</div>
       <div>模板：${template}</div>
       <div>状态：${status}</div>
-      <div>阶段：${phase}</div>
+      <div>阶段：${phase}${depends ? ` · 依赖：${depends}` : ''}</div>
       ${promptLine}
       ${logLine}
       ${summaryLine}
       ${errorLine}
       ${blockers ? `<div>⚠️ 阻塞：<pre>${blockers}</pre></div>` : ''}
+      ${pendingHtml}
+      ${summariesHtml}
       <details><summary>元数据</summary><pre>${metadataDump}</pre></details>
       ${body}
     </article>
   `;
+}
+
+function formatPendingList(pending) {
+  if (!Array.isArray(pending) || pending.length === 0) {
+    return '';
+  }
+  const items = pending.map(item => {
+    if (item && typeof item === 'object') {
+      const text = escapeHtml(String(item.text || '命令'));
+      const risk = escapeHtml(String(item.meta?.risk_level || 'unknown'));
+      return `<li>${text} <span class="tag">风险:${risk}</span></li>`;
+    }
+    return `<li>${escapeHtml(String(item))}</li>`;
+  }).join('');
+  return `<div>⏳ 待确认：<ul>${items}</ul></div>`;
+}
+
+function formatSummaries(history) {
+  if (!Array.isArray(history) || history.length === 0) {
+    return '';
+  }
+  const text = escapeHtml(history.join('\n---\n'));
+  return `<div>📘 摘要历史：<pre>${text}</pre></div>`;
+}
+
+function renderOrchestratorOverview() {
+  if (!sessionCache.length) {
+    orchestratorEl.innerHTML = '<article class="card"><div>暂无 orchestrator 信息</div></article>';
+    return;
+  }
+  const orchestratorSessions = sessionCache.filter(sess => {
+    const metadata = sess.metadata || {};
+    return metadata.phase || metadata.orchestrator_summary || (Array.isArray(metadata.pending_confirmation) && metadata.pending_confirmation.length);
+  });
+  if (!orchestratorSessions.length) {
+    orchestratorEl.innerHTML = '<article class="card"><div>暂无 orchestrator 信息</div></article>';
+    return;
+  }
+  orchestratorSessions.sort((a, b) => {
+    const phaseA = String(a.metadata?.phase || '').localeCompare(String(b.metadata?.phase || ''));
+    if (phaseA !== 0) return phaseA;
+    return String(a.session_name || '').localeCompare(String(b.session_name || ''));
+  });
+  const html = orchestratorSessions.map(sess => {
+    const metadata = sess.metadata || {};
+    const phase = escapeHtml(String(metadata.phase || '未定义'));
+    const summary = metadata.orchestrator_summary ? escapeHtml(String(metadata.orchestrator_summary)) : '';
+    const blockers = Array.isArray(metadata.blockers) && metadata.blockers.length ? escapeHtml(metadata.blockers.join('\n')) : '';
+    const pending = formatPendingList(metadata.pending_confirmation);
+    const lastCommand = Array.isArray(metadata.orchestrator_last_command) && metadata.orchestrator_last_command.length
+      ? escapeHtml(metadata.orchestrator_last_command.join('\n'))
+      : '';
+    const heartbeat = metadata.orchestrator_heartbeat ? formatTimestamp(metadata.orchestrator_heartbeat) : '未知';
+    const depends = Array.isArray(metadata.depends_on) && metadata.depends_on.length
+      ? escapeHtml(metadata.depends_on.join(', '))
+      : '';
+    return `
+      <article class="card">
+        <h3>${escapeHtml(sess.session_name)}</h3>
+        <div><span class="tag">${phase}</span>${depends ? `<span class="tag">依赖：${depends}</span>` : ''}</div>
+        ${summary ? `<div>🤖 ${summary}</div>` : ''}
+        ${blockers ? `<div>⚠️ <pre>${blockers}</pre></div>` : ''}
+        ${pending}
+        ${lastCommand ? `<div>📝 最近命令：<pre>${lastCommand}</pre></div>` : ''}
+        <div>❤️ 心跳：${heartbeat}</div>
+      </article>
+    `;
+  }).join('');
+  orchestratorEl.innerHTML = `<div class="grid">${html}</div>`;
 }
 
 async function fetchNotifications() {
@@ -244,6 +327,7 @@ async function fetchSessions() {
     if (!sessionCache.length) {
       sessionEl.innerHTML = '<option value="">(无可用会话)</option>';
       sessionDetailEl.innerHTML = '<article class="card"><div>暂无会话</div></article>';
+      orchestratorEl.innerHTML = '<article class="card"><div>暂无 orchestrator 信息</div></article>';
       return;
     }
     sessionCache.forEach(sess => {
@@ -258,10 +342,12 @@ async function fetchSessions() {
       sessionEl.value = current;
     }
     renderSessionDetail(current);
+    renderOrchestratorOverview();
     statusEl.textContent = `会话数：${sessionCache.length}`;
   } catch (err) {
     sessionEl.innerHTML = '<option value="">(无可用会话)</option>';
     sessionDetailEl.innerHTML = `<article class="card"><div>⚠️ ${escapeHtml(String(err))}</div></article>`;
+    orchestratorEl.innerHTML = '<article class="card"><div>⚠️ 无法加载 orchestrator 信息</div></article>';
     statusEl.textContent = `⚠️ ${escapeHtml(String(err))}`;
   }
 }
