@@ -19,6 +19,7 @@ from tmux_agent.orchestrator.config import TaskSpec
 from tmux_agent.orchestrator.replay import summarize_events
 from tmux_agent.orchestrator.service import OrchestratorService
 from tmux_agent.state import StateStore
+from tmux_agent.constants import COMMAND_RESULT_SENTINEL
 
 
 def _append_agent(store: StateStore, branch: str, session: str, log_path: Path) -> None:
@@ -112,8 +113,8 @@ def test_orchestrator_injects_commands(tmp_path):
 
         notifications = _read_jsonl(bus.notifications_path)
         assert notifications, "notification should be written"
-        assert notifications[-1]["body"] == "please confirm"
-        assert notifications[-1].get("meta", {}).get("requires_attention") is True
+        assert any(item.get("body") == "please confirm" for item in notifications)
+        assert any(item.get("meta", {}).get("requires_attention") for item in notifications)
 
         codex._decisions = [
             OrchestratorDecision(
@@ -130,19 +131,26 @@ def test_orchestrator_injects_commands(tmp_path):
         service.run_once()
         commands_after = _read_jsonl(bus.commands_path)
         assert len(commands_after) == 2
-        assert commands_after[0]["text"] == "echo hello"
-        assert commands_after[1]["text"] == "echo skip"
+        assert commands_after[0]["text"].startswith("echo hello")
+        assert commands_after[1]["text"].startswith("echo skip")
+        assert COMMAND_RESULT_SENTINEL in commands_after[0]["text"]
+        assert COMMAND_RESULT_SENTINEL in commands_after[1]["text"]
+        assert commands_after[0]["meta"].get("command_id")
 
         session = store.get_agent_session("storyapp/feature-x")
         metadata = session["metadata"]
         assert metadata.get("pending_confirmation") == []
         assert metadata.get("phase") == "executing"
+        tracker = metadata.get("command_tracker")
+        assert isinstance(tracker, list) and tracker, "command tracker should capture executed commands"
+        assert tracker[-1].get("status") == "pending"
 
         service._last_command_at["storyapp/feature-x"] = time.time() - 3600
         service._session_busy_until.clear()
         service.run_once()
         commands_final = _read_jsonl(bus.commands_path)
-        assert commands_final[-1]["text"] == "echo second"
+        assert commands_final[-1]["text"].startswith("echo second")
+        assert COMMAND_RESULT_SENTINEL in commands_final[-1]["text"]
 
         session = store.get_agent_session("storyapp/feature-x")
         metadata = session["metadata"]
@@ -260,7 +268,346 @@ def test_orchestrator_respects_dependencies(tmp_path):
 
         service.run_once()
         commands_after = _read_jsonl(bus.commands_path)
-        assert commands_after[-1]["text"] == "echo dependent"
+        assert commands_after[-1]["text"].startswith("echo dependent")
+        assert COMMAND_RESULT_SENTINEL in commands_after[-1]["text"]
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_detects_stall(tmp_path):
+    log_path = tmp_path / "logs" / "agent-stall.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("boot\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/stall"
+    session_name = "agent-storyapp-stall"
+    _append_agent(store, branch, session_name, log_path)
+    now = time.time()
+    store.upsert_agent_session(
+        branch=branch,
+        worktree_path=str(log_path.parent),
+        session_name=session_name,
+        model="gpt-5-codex",
+        template="orchestrator",
+        description="stall",
+        last_prompt="",
+        status="idle",
+        log_path=str(log_path),
+        metadata={
+            "command_tracker": [
+                {
+                    "command_id": "cmd-old",
+                    "text": "echo stuck",
+                    "status": "pending",
+                    "dispatched_at": now - 600,
+                    "session": session_name,
+                }
+            ]
+        },
+    )
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=5.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
+        stall_timeout_seconds=1.0,
+        stall_retries_before_notify=1,
+        failure_alert_threshold=3,
+    )
+
+    decisions = [
+        OrchestratorDecision(
+            summary=None,
+            notify=None,
+            requires_confirmation=False,
+            phase=None,
+            blockers=(),
+            commands=(),
+        )
+    ]
+
+    codex = FakeCodexClient(decisions)
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=codex,
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        session = store.get_agent_session(branch)
+        metadata = session["metadata"]
+        assert metadata.get("orchestrator_stall_count") == 1
+        blockers = metadata.get("blockers") or []
+        assert any("echo stuck" in blocker for blocker in blockers)
+        notifications = _read_jsonl(bus.notifications_path)
+        assert notifications, "stall detection should emit notification"
+        assert any("命令卡顿" in item.get("title", "") for item in notifications)
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_flags_repeated_failures(tmp_path):
+    log_path = tmp_path / "logs" / "agent-fail.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("boot\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/failure"
+    session_name = "agent-storyapp-failure"
+    _append_agent(store, branch, session_name, log_path)
+    store.upsert_agent_session(
+        branch=branch,
+        worktree_path=str(log_path.parent),
+        session_name=session_name,
+        model="gpt-5-codex",
+        template="orchestrator",
+        description="failure",
+        last_prompt="",
+        status="idle",
+        log_path=str(log_path),
+        metadata={
+            "command_history": [
+                {"command_id": "cmd-a", "status": "failed", "exit_code": 1},
+                {"command_id": "cmd-b", "status": "failed", "exit_code": 1},
+            ]
+        },
+    )
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=5.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
+        stall_timeout_seconds=999,
+        failure_alert_threshold=2,
+    )
+
+    codex = FakeCodexClient(
+        [
+            OrchestratorDecision(
+                summary=None,
+                notify=None,
+                requires_confirmation=False,
+                phase=None,
+                blockers=(),
+                commands=(),
+            )
+        ]
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=codex,
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        session = store.get_agent_session(branch)
+        metadata = session["metadata"]
+        assert metadata.get("orchestrator_failure_streak") == 2
+        blockers = metadata.get("blockers") or []
+        assert any("连续" in blocker for blocker in blockers)
+        notifications = _read_jsonl(bus.notifications_path)
+        assert notifications
+        assert any("命令连续失败" in item.get("title", "") for item in notifications)
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_updates_next_actions(tmp_path):
+    log_path = tmp_path / "logs" / "agent-insight.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("boot\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/insight"
+    session_name = "agent-storyapp-insight"
+    _append_agent(store, branch, session_name, log_path)
+    now = time.time()
+    store.upsert_agent_session(
+        branch=branch,
+        worktree_path=str(log_path.parent),
+        session_name=session_name,
+        model="gpt-5-codex",
+        template="orchestrator",
+        description="insight",
+        last_prompt="",
+        status="idle",
+        log_path=str(log_path),
+        metadata={
+            "phase": "planning",
+            "phase_plan": ["planning", "executing", "verifying"],
+            "phase_history": ["planning"],
+            "blockers": ["等待依赖"],
+            "command_tracker": [
+                {
+                    "command_id": "cmd-pending",
+                    "text": "npm test",
+                    "status": "pending",
+                    "dispatched_at": now - 120,
+                    "session": session_name,
+                }
+            ],
+            "command_history": [
+                {"command_id": "cmd-last", "status": "failed", "exit_code": 1, "text": "npm lint"}
+            ],
+        },
+    )
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=5.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
+        stall_timeout_seconds=999,
+        failure_alert_threshold=5,
+    )
+
+    codex = FakeCodexClient(
+        [
+            OrchestratorDecision(
+                summary=None,
+                notify=None,
+                requires_confirmation=False,
+                phase="planning",
+                blockers=(),
+                commands=(),
+            )
+        ]
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=codex,
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        session = store.get_agent_session(branch)
+        metadata = session["metadata"]
+        next_actions = metadata.get("next_actions")
+        assert isinstance(next_actions, dict)
+        recs = next_actions.get("recommendations") or []
+        assert recs, "should produce recommendations"
+        titles = [item.get("title") for item in recs]
+        assert "解除 blocker" in titles
+        notifications = _read_jsonl(bus.notifications_path)
+        assert any("下一步建议" in item.get("title", "") for item in notifications)
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_decomposes_requirements(tmp_path):
+    log_path = tmp_path / "logs" / "agent-doc.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("boot\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/doc"
+    session_name = "agent-storyapp-doc"
+    _append_agent(store, branch, session_name, log_path)
+    store.upsert_agent_session(
+        branch=branch,
+        worktree_path=str(log_path.parent),
+        session_name=session_name,
+        model="gpt-5-codex",
+        template="orchestrator",
+        description="doc",
+        last_prompt="",
+        status="idle",
+        log_path=str(log_path),
+        metadata={"requirements_doc": "docs/weather_bot_end_to_end_plan.md"},
+    )
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=5.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
+    )
+
+    codex = FakeCodexClient(
+        [
+            OrchestratorDecision(
+                summary=None,
+                notify=None,
+                requires_confirmation=False,
+                phase="planning",
+                blockers=(),
+                commands=(),
+            )
+        ]
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=codex,
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        session = store.get_agent_session(branch)
+        metadata = session["metadata"]
+        decomposition = metadata.get("task_decomposition")
+        assert isinstance(decomposition, list) and decomposition, "task decomposition should be populated"
+        first_step = decomposition[0]
+        assert "description" in first_step
+        meta_info = metadata.get("task_decomposition_meta")
+        assert isinstance(meta_info, dict) and meta_info.get("source")
     finally:
         service.agent_service.close()
         store.close()
@@ -387,20 +734,22 @@ def test_orchestrator_respects_session_cooldown_queue(tmp_path):
         service.run_once()
         commands = _read_jsonl(bus.commands_path)
         assert len(commands) == 1
-        assert commands[0]["text"] == "echo first"
+        assert commands[0]["text"].startswith("echo first")
+        assert COMMAND_RESULT_SENTINEL in commands[0]["text"]
 
         session = store.get_agent_session(branch)
         assert session is not None
         metadata = session["metadata"]
         queued = metadata.get("queued_commands")
-        assert queued and queued[0]["text"] == "echo second"
+        assert queued and queued[0]["text"].startswith("echo second")
 
         service._session_busy_until.clear()
         service._flush_queued_commands()
 
         commands_after = _read_jsonl(bus.commands_path)
         assert len(commands_after) == 2
-        assert commands_after[-1]["text"] == "echo second"
+        assert commands_after[-1]["text"].startswith("echo second")
+        assert COMMAND_RESULT_SENTINEL in commands_after[-1]["text"]
 
         session = store.get_agent_session(branch)
         assert session["metadata"].get("queued_commands") == []

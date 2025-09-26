@@ -74,6 +74,9 @@ class OrchestratorConfig(BaseModel):
     metrics_port: int | None = None
     metrics_host: str = "0.0.0.0"
     tasks: list[TaskSpec] = Field(default_factory=list)
+    stall_timeout_seconds: float = 300.0
+    stall_retries_before_notify: int = 2
+    failure_alert_threshold: int = 3
 
     def expand_paths(self, base: Path) -> "OrchestratorConfig":
         clone = self.model_copy(deep=True)

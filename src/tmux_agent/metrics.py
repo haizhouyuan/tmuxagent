@@ -54,6 +54,16 @@ ORCHESTRATOR_DECISION_LATENCY = Histogram(
     "Time taken to evaluate a single orchestrator decision",
     buckets=(0.5, 1, 2, 5, 10, 20, 30, 60),
 )
+ORCHESTRATOR_COMMAND_FAILURES = Counter(
+    "orchestrator_command_failures_total",
+    "Number of orchestrator-injected commands that exited non-zero",
+    labelnames=("branch",),
+)
+ORCHESTRATOR_COMMAND_SUCCESSES = Counter(
+    "orchestrator_command_success_total",
+    "Number of orchestrator-injected commands that exited with code 0",
+    labelnames=("branch",),
+)
 
 
 def record_command(result: str) -> None:
@@ -104,3 +114,15 @@ def start_server(port: int, host: str = "0.0.0.0") -> None:
     if _start_http_server is None:  # pragma: no cover - optional dependency missing
         return
     _start_http_server(port, addr=host)
+
+
+def record_command_failure(branch: str) -> None:
+    """Increment failure counter for orchestrator commands."""
+
+    ORCHESTRATOR_COMMAND_FAILURES.labels(branch=branch).inc()
+
+
+def record_command_success(branch: str) -> None:
+    """Increment success counter for orchestrator commands."""
+
+    ORCHESTRATOR_COMMAND_SUCCESSES.labels(branch=branch).inc()

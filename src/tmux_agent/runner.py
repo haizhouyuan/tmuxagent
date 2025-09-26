@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
 from typing import Iterable
 
-import re
 import shlex
 import subprocess
 
@@ -15,6 +15,9 @@ from .approvals import ApprovalManager
 from .config import AgentConfig
 from .config import HostConfig
 from .config import PolicyConfig
+from .constants import COMMAND_HISTORY_LIMIT
+from .constants import COMMAND_RESULT_SENTINEL
+from . import metrics
 from .local_bus import LocalBus
 from .notify import Notifier
 from .notify import NotificationMessage
@@ -40,6 +43,10 @@ class HostRuntime:
 
 
 class Runner:
+    _RESULT_PATTERN = re.compile(
+        rf"{COMMAND_RESULT_SENTINEL}\s+(?P<command_id>\S+)\s+(?P<exit_code>-?\d+)"
+    )
+
     def __init__(
         self,
         agent_config: AgentConfig,
@@ -98,6 +105,7 @@ class Runner:
                 if new_lines:
                     agent_record = self.state_store.find_agent_by_session(pane.session_name)
                     if agent_record:
+                        self._process_command_results(agent_record, new_lines)
                         snippet = "\n".join(new_lines[-20:])
                         self.state_store.update_agent_runtime(
                             agent_record["branch"],
@@ -184,6 +192,87 @@ class Runner:
                 body=f"{payload.get('sender', 'local')} -> {session or pane_target}: {text}",
             )
         )
+
+    def _process_command_results(self, agent_record: dict[str, Any], lines: list[str]) -> None:
+        matches: list[tuple[str, int, str]] = []
+        for line in lines:
+            match = self._RESULT_PATTERN.search(line)
+            if match:
+                command_id = match.group('command_id')
+                exit_code = int(match.group('exit_code'))
+                matches.append((command_id, exit_code, line))
+        if not matches:
+            return
+        branch = agent_record.get('branch')
+        if not branch:
+            return
+        session_row = self.state_store.get_agent_session(branch)
+        session_metadata = dict((session_row or {}).get('metadata') or {})
+        tracker: list[dict[str, Any]] = []
+        raw_tracker = session_metadata.get('command_tracker')
+        if isinstance(raw_tracker, list):
+            for item in raw_tracker:
+                if isinstance(item, dict):
+                    tracker.append(dict(item))
+        history: list[dict[str, Any]] = []
+        raw_history = session_metadata.get('command_history')
+        if isinstance(raw_history, list):
+            for item in raw_history:
+                if isinstance(item, dict):
+                    history.append(dict(item))
+        last_result: dict[str, Any] | None = None
+        now = int(time.time())
+        for command_id, exit_code, line in matches:
+            status = 'succeeded' if exit_code == 0 else 'failed'
+            tracker_entry = None
+            for item in tracker:
+                if item.get('command_id') == command_id:
+                    tracker_entry = item
+                    break
+            if tracker_entry is None:
+                tracker_entry = {
+                    'command_id': command_id,
+                    'text': None,
+                    'session': agent_record.get('session_name'),
+                    'risk_level': None,
+                    'dispatched_at': None,
+                }
+                tracker.append(tracker_entry)
+            tracker_entry['status'] = status
+            tracker_entry['exit_code'] = exit_code
+            tracker_entry['completed_at'] = now
+            tracker_entry['result_marker'] = line
+            history.append(
+                {
+                    'command_id': command_id,
+                    'text': tracker_entry.get('text'),
+                    'exit_code': exit_code,
+                    'status': status,
+                    'completed_at': now,
+                }
+            )
+            last_result = {
+                'command_id': command_id,
+                'exit_code': exit_code,
+                'status': status,
+                'completed_at': now,
+            }
+            if exit_code == 0:
+                metrics.record_command_success(branch)
+            else:
+                metrics.record_command_failure(branch)
+        tracker = tracker[-COMMAND_HISTORY_LIMIT:]
+        history = history[-COMMAND_HISTORY_LIMIT:]
+        updates: dict[str, Any] = {
+            'command_tracker': tracker,
+            'command_history': history,
+        }
+        if last_result is not None:
+            updates['last_command_result'] = last_result
+        self.state_store.update_agent_runtime(branch, metadata=updates)
+        merged_metadata = dict(session_metadata)
+        merged_metadata.update(updates)
+        agent_record['metadata'] = merged_metadata
 
     def _notify_error(self, context: str, exc: Exception) -> None:
         try:

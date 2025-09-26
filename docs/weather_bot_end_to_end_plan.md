@@ -6,6 +6,8 @@
 
 ## 0. 前置准备
 
+> **自动分解提醒**：若在 orchestrator metadata 中设置 `requirements_doc="docs/weather_bot_end_to_end_plan.md"`，服务会自动解析本文生成 `task_decomposition`，并在 Dashboard "下一步建议" 中同步展示。
+
 1. **创建试验仓库**
    ```bash
    mkdir -p /home/yuanhaizhou/projects/testprojectfortmuxagent

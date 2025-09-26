@@ -4,6 +4,7 @@ import yaml
 from tmux_agent.approvals import ApprovalManager
 from tmux_agent.config import AgentConfig
 from tmux_agent.config import PolicyConfig
+from tmux_agent.constants import COMMAND_RESULT_SENTINEL
 from tmux_agent.notify import MockNotifier
 from tmux_agent.runner import HostRuntime
 from tmux_agent.runner import Runner
@@ -210,3 +211,61 @@ def test_runner_process_bus_command(state_store, tmp_path):
 
     assert any(blob.startswith('[SENT:hello orchestrator') for blob in adapter._panes.values())
     assert any(msg.title == '指令已注入' for msg in notifier.sent)
+
+
+def test_runner_records_command_results(state_store, tmp_path):
+    agent_config = make_agent_config(tmp_path)
+    policy = make_policy()
+    approval_manager = ApprovalManager(state_store, tmp_path / "approvals", secret="secret")
+    notifier = MockNotifier()
+
+    adapter = FakeTmuxAdapter({"%1": ""})
+    adapter.set_meta("%1", "proj:storyapp", "agent:codex-ci", "codex:ci")
+
+    runtime = HostRuntime(host=agent_config.hosts[0], adapter=adapter)
+    runner = Runner(
+        agent_config=agent_config,
+        policy=policy,
+        state_store=state_store,
+        notifier=notifier,
+        approval_manager=approval_manager,
+        adapters=[runtime],
+        dry_run=False,
+    )
+
+    branch = "storyapp/feature-z"
+    session_name = "proj:storyapp"
+    state_store.upsert_agent_session(
+        branch=branch,
+        worktree_path=str(tmp_path),
+        session_name=session_name,
+        model="gpt-5-codex",
+        template="orchestrator",
+        description="demo",
+        status="running",
+        log_path=str(tmp_path / "log.txt"),
+        metadata={
+            "command_tracker": [
+                {
+                    "command_id": "cmd-test",
+                    "text": "echo hi",
+                    "status": "pending",
+                    "dispatched_at": 1,
+                }
+            ]
+        },
+    )
+
+    agent_record = state_store.find_agent_by_session(session_name)
+    assert agent_record is not None
+    sentinel_line = f"{COMMAND_RESULT_SENTINEL} cmd-test 1"
+    runner._process_command_results(agent_record, ["some output", sentinel_line])
+
+    session = state_store.get_agent_session(branch)
+    assert session is not None
+    metadata = session["metadata"]
+    tracker = metadata.get("command_tracker")
+    assert isinstance(tracker, list) and tracker[-1]["status"] == "failed"
+    assert metadata.get("last_command_result", {}).get("exit_code") == 1
+    history = metadata.get("command_history")
+    assert isinstance(history, list) and history[-1]["command_id"] == "cmd-test"

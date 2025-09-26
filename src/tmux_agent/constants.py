@@ -1,0 +1,6 @@
+"""Shared constants for tmux-agent components."""
+
+COMMAND_RESULT_SENTINEL = "__TMUXAGENT_RESULT"
+COMMAND_HISTORY_LIMIT = 20
+
+__all__ = ["COMMAND_RESULT_SENTINEL", "COMMAND_HISTORY_LIMIT"]

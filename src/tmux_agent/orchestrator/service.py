@@ -12,6 +12,8 @@ from typing import Optional
 from uuid import uuid4
 
 from .. import metrics
+from ..constants import COMMAND_HISTORY_LIMIT
+from ..constants import COMMAND_RESULT_SENTINEL
 from ..agents.service import AgentRecord
 from ..agents.service import AgentService
 from ..local_bus import LocalBus
@@ -22,6 +24,8 @@ from .codex_client import CodexClient
 from .codex_client import OrchestratorDecision
 from .config import OrchestratorConfig
 from .config import TaskSpec
+from .decomposer import decompose_requirements
+from .insights import build_recommendations
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,9 @@ class OrchestratorService:
         audit_dir = self.agent_service.config.repo_root / ".tmuxagent" / "logs"
         audit_dir.mkdir(parents=True, exist_ok=True)
         self._audit_log_path = audit_dir / "orchestrator-actions.jsonl"
+        self._command_tracker_limit = COMMAND_HISTORY_LIMIT
+        self._stall_counts: dict[str, int] = {}
+        self._failure_alert_state: dict[str, int] = {}
 
     def run_forever(self) -> None:  # pragma: no cover - integration flow
         interval = self.config.poll_interval
@@ -95,19 +102,22 @@ class OrchestratorService:
         for snapshot in snapshots:
             self._update_heartbeat(snapshot, now_ts)
             self._maybe_rotate_log(snapshot.record.log_path)
+            self._maybe_decompose_requirements(snapshot)
             self._maybe_generate_summary(snapshot)
-            if not self._should_process(snapshot):
-                continue
-            prompt = self._render_prompt(snapshot)
-            start_time = time.perf_counter()
-            try:
-                decision = self.codex.run(prompt)
-            except Exception as exc:
-                logger.error("Codex execution failed for %s: %s", snapshot.branch, exc)
-                self._record_error(snapshot, str(exc))
-                continue
-            metrics.observe_decision_latency(time.perf_counter() - start_time)
-            self._handle_decision(snapshot, decision)
+            self._detect_and_handle_stall(snapshot, now_ts)
+            self._handle_repeated_failures(snapshot, now_ts)
+            if self._should_process(snapshot):
+                prompt = self._render_prompt(snapshot)
+                start_time = time.perf_counter()
+                try:
+                    decision = self.codex.run(prompt)
+                except Exception as exc:
+                    logger.error("Codex execution failed for %s: %s", snapshot.branch, exc)
+                    self._record_error(snapshot, str(exc))
+                    continue
+                metrics.observe_decision_latency(time.perf_counter() - start_time)
+                self._handle_decision(snapshot, decision)
+            self._update_next_actions(snapshot)
         self._flush_queued_commands()
 
     def _maybe_start_metrics(self) -> None:
@@ -236,6 +246,33 @@ class OrchestratorService:
             self.agent_service.update_status(record.branch, metadata=updates)
             metadata.update(updates)
         return metadata
+
+    def _maybe_decompose_requirements(self, snapshot: AgentSnapshot) -> None:
+        requirements_path = snapshot.metadata.get("requirements_doc")
+        if not requirements_path:
+            return
+        try:
+            resolved = Path(str(requirements_path)).expanduser()
+        except (TypeError, ValueError):
+            return
+        if not resolved.exists():
+            return
+        meta_info = snapshot.metadata.get("task_decomposition_meta")
+        source_mtime = int(resolved.stat().st_mtime)
+        if isinstance(meta_info, dict) and meta_info.get("source_mtime") == source_mtime:
+            return
+        steps = decompose_requirements(resolved)
+        if not steps:
+            return
+        payload = {
+            "task_decomposition": steps,
+            "task_decomposition_meta": {
+                "source": str(resolved),
+                "source_mtime": source_mtime,
+            },
+        }
+        self.agent_service.update_status(snapshot.branch, metadata=payload)
+        snapshot.metadata.update(payload)
 
     def _render_prompt(self, snapshot: AgentSnapshot) -> str:
         current_phase = str(snapshot.metadata.get("phase") or self.config.default_phase)
@@ -418,6 +455,11 @@ class OrchestratorService:
     ) -> None:
         now = time.time()
         session = payload.get("session")
+        command_id = None
+        original_text = None
+        if branch:
+            command_id, original_text = self._ensure_command_metadata(payload)
+            self._apply_command_instrumentation(payload, command_id, original_text)
         if self.config.dry_run:
             logger.info("[dry-run] skip dispatch: %s", payload.get("text"))
             metrics.record_command("dry_run")
@@ -426,6 +468,17 @@ class OrchestratorService:
             if session:
                 self._session_busy_until[session] = now + self.config.session_cooldown_seconds
             metrics.record_command("dispatched")
+        if branch and command_id and original_text:
+            self._track_command_dispatch(
+                branch,
+                command_id=command_id,
+                original_text=original_text,
+                session=session,
+                queued=queued,
+                dispatched_at=now,
+                dry_run=self.config.dry_run,
+                risk_level=payload.get("meta", {}).get("risk_level"),
+            )
         if branch:
             self._last_command_at[branch] = now
             log_payload = {
@@ -440,6 +493,214 @@ class OrchestratorService:
                 log_payload["dry_run"] = True
             self._log_action(log_payload)
 
+    def _ensure_command_metadata(self, payload: dict[str, Any]) -> tuple[str, str]:
+        meta = payload.setdefault("meta", {})
+        command_id = meta.get("command_id")
+        if not command_id:
+            command_id = f"cmd-{uuid4().hex}"
+            meta["command_id"] = command_id
+        original_text = meta.get("original_text")
+        if not original_text:
+            original_text = str(payload.get("text") or "")
+            meta["original_text"] = original_text
+        return command_id, original_text
+
+    def _apply_command_instrumentation(
+        self,
+        payload: dict[str, Any],
+        command_id: str,
+        original_text: str,
+    ) -> None:
+        meta = payload.setdefault("meta", {})
+        if meta.get("instrumented"):
+            return
+        sentinel = COMMAND_RESULT_SENTINEL
+        trailer = (
+            f"__tmuxagent_status=$?; printf \"{sentinel} {command_id} %s\\n\" \"$__tmuxagent_status\""
+        )
+        normalized = original_text.rstrip()
+        if not normalized:
+            payload["text"] = original_text
+        else:
+            separator = "" if normalized.endswith(";") else ";"
+            payload["text"] = f"{normalized}{separator} {trailer}"
+        meta["instrumented"] = True
+
+    def _track_command_dispatch(
+        self,
+        branch: str,
+        *,
+        command_id: str,
+        original_text: str,
+        session: str | None,
+        queued: bool,
+        dispatched_at: float,
+        dry_run: bool,
+        risk_level: Any,
+    ) -> None:
+        session_row = self.state_store.get_agent_session(branch)
+        metadata = dict((session_row or {}).get("metadata") or {})
+        tracker: list[dict[str, Any]] = []
+        raw_tracker = metadata.get("command_tracker")
+        if isinstance(raw_tracker, list):
+            for item in raw_tracker:
+                if isinstance(item, dict) and item.get("command_id") != command_id:
+                    tracker.append(dict(item))
+        entry = {
+            "command_id": command_id,
+            "text": original_text,
+            "session": session,
+            "risk_level": risk_level,
+            "queued": queued,
+            "dispatched_at": dispatched_at,
+            "status": "dry_run" if dry_run else "pending",
+        }
+        tracker.append(entry)
+        tracker = tracker[-self._command_tracker_limit :]
+        updates = {"command_tracker": tracker}
+        self.agent_service.update_status(branch, metadata=updates)
+
+    def _append_blocker(self, metadata: dict[str, Any], message: str) -> list[str]:
+        blockers: list[str] = []
+        raw_blockers = metadata.get("blockers")
+        if isinstance(raw_blockers, list):
+            for item in raw_blockers:
+                text = str(item)
+                if text:
+                    blockers.append(text)
+        if message not in blockers:
+            blockers.append(message)
+        return blockers[-10:]
+
+    def _detect_and_handle_stall(self, snapshot: AgentSnapshot, now_ts: int) -> None:
+        timeout = self.config.stall_timeout_seconds
+        if timeout <= 0:
+            return
+        tracker = snapshot.metadata.get("command_tracker")
+        pending: list[tuple[dict[str, Any], float]] = []
+        if isinstance(tracker, list):
+            for item in tracker:
+                if not isinstance(item, dict):
+                    continue
+                status = str(item.get("status") or "").lower()
+                if status not in {"pending", "dry_run"}:
+                    continue
+                dispatched_at = item.get("dispatched_at")
+                if isinstance(dispatched_at, (int, float)):
+                    pending.append((item, float(dispatched_at)))
+        if not pending:
+            self._stall_counts.pop(snapshot.branch, None)
+            return
+        oldest_entry, dispatched_ts = min(pending, key=lambda pair: pair[1])
+        if dispatched_ts <= 0 or (now_ts - dispatched_ts) < timeout:
+            self._stall_counts.pop(snapshot.branch, None)
+            return
+        stall_count = self._stall_counts.get(snapshot.branch, 0) + 1
+        self._stall_counts[snapshot.branch] = stall_count
+        wait_seconds = int(now_ts - dispatched_ts)
+        command_label = oldest_entry.get("text") or oldest_entry.get("command_id") or snapshot.branch
+        message = f"命令 {command_label} 已等待 {wait_seconds}s 未完成，触发第 {stall_count} 次自检"
+        blockers = self._append_blocker(snapshot.metadata, message)
+        updates = {
+            "blockers": blockers,
+            "orchestrator_error": message,
+            "orchestrator_stall_count": stall_count,
+        }
+        self.agent_service.update_status(snapshot.branch, metadata=updates)
+        snapshot.metadata.update(updates)
+        metrics.record_error(snapshot.branch)
+        notify_every = max(1, int(self.config.stall_retries_before_notify or 1))
+        if stall_count == 1 or stall_count % notify_every == 0:
+            self.notifier.send(
+                NotificationMessage(
+                    title=f"{snapshot.branch} 命令卡顿",
+                    body=message,
+                    meta={"requires_attention": True, "severity": "warning"},
+                )
+            )
+        self._last_command_at[snapshot.branch] = now_ts - self.config.cooldown_seconds
+        for entry, _ in pending:
+            session_name = entry.get("session")
+            if isinstance(session_name, str):
+                self._session_busy_until.pop(session_name, None)
+
+    def _handle_repeated_failures(self, snapshot: AgentSnapshot, now_ts: int) -> None:
+        threshold = self.config.failure_alert_threshold
+        if threshold <= 0:
+            return
+        history = snapshot.metadata.get("command_history")
+        consecutive_failures = 0
+        if isinstance(history, list):
+            for item in reversed(history):
+                if not isinstance(item, dict):
+                    continue
+                status = str(item.get("status") or "").lower()
+                if status == "failed":
+                    consecutive_failures += 1
+                elif status in {"succeeded", "success", "ok"}:
+                    break
+                else:
+                    break
+        if consecutive_failures >= threshold:
+            if self._failure_alert_state.get(snapshot.branch) == consecutive_failures:
+                return
+            message = f"已连续 {consecutive_failures} 次命令失败，请人工介入"
+            blockers = self._append_blocker(snapshot.metadata, message)
+            updates = {
+                "blockers": blockers,
+                "orchestrator_error": message,
+                "last_failure_alert": now_ts,
+                "orchestrator_failure_streak": consecutive_failures,
+            }
+            self.agent_service.update_status(snapshot.branch, metadata=updates)
+            snapshot.metadata.update(updates)
+            self._failure_alert_state[snapshot.branch] = consecutive_failures
+            metrics.record_error(snapshot.branch)
+            self.notifier.send(
+                NotificationMessage(
+                    title=f"{snapshot.branch} 命令连续失败",
+                    body=message,
+                    meta={"requires_attention": True, "severity": "critical"},
+                )
+            )
+            self._last_command_at[snapshot.branch] = now_ts - self.config.cooldown_seconds
+        else:
+            self._failure_alert_state.pop(snapshot.branch, None)
+
+    def _update_next_actions(self, snapshot: AgentSnapshot) -> None:
+        try:
+            insights = build_recommendations(snapshot)
+        except Exception:  # pragma: no cover - insights should not break orchestrator
+            logger.debug("Failed to build decision insights", exc_info=True)
+            return
+        if not insights:
+            return
+        existing = snapshot.metadata.get("next_actions")
+        if isinstance(existing, dict):
+            if existing.get("recommendations") == insights.get("recommendations"):
+                return
+        self.agent_service.update_status(snapshot.branch, metadata={"next_actions": insights})
+        snapshot.metadata["next_actions"] = insights
+        recs = insights.get("recommendations") or []
+        if not recs:
+            return
+        top = recs[0]
+        priority = str(top.get("priority") or "").lower()
+        requires_attention = priority in {"high", "critical"}
+        if priority in {"", "low"}:
+            return
+        self.notifier.send(
+            NotificationMessage(
+                title=f"{snapshot.branch} 下一步建议",
+                body=f"{top.get('title')}: {top.get('detail')}",
+                meta={
+                    "requires_attention": requires_attention,
+                    "priority": priority,
+                    "confidence": insights.get("confidence"),
+                    "category": "insight",
+                },
+            )
+        )
     def _queue_command(
         self,
         session: str,
