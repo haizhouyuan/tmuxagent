@@ -21,6 +21,9 @@ class CommandSuggestion:
     text: str
     session: str | None = None
     enter: bool = True
+    cwd: str | None = None
+    risk_level: str = "low"
+    notes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,8 @@ class OrchestratorDecision:
     commands: tuple[CommandSuggestion, ...]
     notify: str | None
     requires_confirmation: bool
+    phase: str | None
+    blockers: tuple[str, ...]
 
     @property
     def has_commands(self) -> bool:
@@ -112,12 +117,38 @@ class CodexClient:
                 continue
             enter = bool(item.get("enter", True))
             session = item.get("session")
-            commands.append(CommandSuggestion(text=text, session=session, enter=enter))
+            cwd = item.get("cwd")
+            risk_level = str(item.get("risk_level", "low")).lower()
+            notes = item.get("notes")
+            commands.append(
+                CommandSuggestion(
+                    text=text,
+                    session=session,
+                    enter=enter,
+                    cwd=cwd,
+                    risk_level=risk_level,
+                    notes=notes if isinstance(notes, str) else None,
+                )
+            )
+        blockers_raw = data.get("blockers") or []
+        if isinstance(blockers_raw, str):
+            blockers = tuple(blockers_raw.splitlines())
+        elif isinstance(blockers_raw, Iterable):
+            blockers = tuple(str(item) for item in blockers_raw)
+        else:
+            blockers = tuple()
+        phase = data.get("phase")
+        if isinstance(phase, str):
+            phase_value = phase.strip()
+        else:
+            phase_value = None
         return OrchestratorDecision(
             summary=summary if isinstance(summary, str) else None,
             notify=notify if isinstance(notify, str) else None,
             commands=tuple(commands),
             requires_confirmation=requires_confirmation,
+            phase=phase_value,
+            blockers=blockers,
         )
 
 

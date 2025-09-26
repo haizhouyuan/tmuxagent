@@ -56,6 +56,11 @@ class OrchestratorService:
         self.notifier = notifier
         self.codex = codex
         self.config = config
+        self._phase_prompts = {
+            phase: path
+            for phase, path in config.phase_prompts.items()
+            if path.exists()
+        }
         self._last_command_at: dict[str, float] = {}
 
     def run_forever(self) -> None:  # pragma: no cover - integration flow
@@ -151,7 +156,9 @@ class OrchestratorService:
         )
 
     def _render_prompt(self, snapshot: AgentSnapshot) -> str:
-        command_template = self.config.prompts.command.read_text(encoding="utf-8")
+        current_phase = str(snapshot.metadata.get("phase") or self.config.default_phase)
+        prompt_path = self._phase_prompts.get(current_phase, self.config.prompts.command)
+        command_template = prompt_path.read_text(encoding="utf-8")
         summary_template = (
             self.config.prompts.summary.read_text(encoding="utf-8")
             if self.config.prompts.summary and self.config.prompts.summary.exists()
@@ -180,25 +187,56 @@ class OrchestratorService:
                 metadata={
                     "orchestrator_summary": decision.summary,
                     "orchestrator_last_command": [cmd.text for cmd in decision.commands],
+                    "phase": decision.phase or snapshot.metadata.get("phase") or self.config.default_phase,
+                    "blockers": list(decision.blockers) if decision.blockers else [],
                 },
             )
+        elif decision.phase or decision.blockers:
+            meta_updates: dict[str, object] = {}
+            if decision.phase:
+                meta_updates["phase"] = decision.phase
+            if decision.blockers:
+                meta_updates["blockers"] = list(decision.blockers)
+            if meta_updates:
+                self.agent_service.update_status(snapshot.branch, metadata=meta_updates)
+        confirmation_required = decision.requires_confirmation
         if decision.has_commands:
             sent = 0
             for command in decision.commands:
                 if sent >= self.config.max_commands_per_cycle:
                     break
                 target_session = command.session or snapshot.session
+                risk_level = command.risk_level
+                if risk_level in {"high", "critical"}:
+                    confirmation_required = True
+                meta = {
+                    "risk_level": risk_level,
+                    "phase": decision.phase
+                    or snapshot.metadata.get("phase")
+                    or self.config.default_phase,
+                }
+                if command.cwd:
+                    meta["cwd"] = command.cwd
+                if command.notes:
+                    meta["notes"] = command.notes
                 self.bus.append_command(
                     {
                         "text": command.text,
                         "session": target_session,
                         "enter": command.enter,
                         "sender": "orchestrator",
+                        "meta": meta,
                     }
                 )
                 sent += 1
                 self._last_command_at[snapshot.branch] = time.time()
-        if decision.notify and (not self.config.notify_only_on_confirmation or decision.requires_confirmation):
+                if risk_level in {"high", "critical"}:
+                    self._record_pending_confirmation(snapshot.branch, command.text)
+        should_notify = decision.notify and (
+            not self.config.notify_only_on_confirmation
+            or confirmation_required
+        )
+        if should_notify:
             self.notifier.send(
                 NotificationMessage(
                     title=f"{snapshot.branch} 需要关注",
@@ -217,6 +255,18 @@ class OrchestratorService:
             snapshot.branch,
             metadata={"orchestrator_heartbeat": now_ts},
         )
+
+    def _record_pending_confirmation(self, branch: str, command: str) -> None:
+        session = self.state_store.get_agent_session(branch)
+        if not session:
+            return
+        metadata = session.get("metadata") or {}
+        pending = metadata.get("pending_confirmation")
+        if isinstance(pending, list):
+            updated = pending + [command]
+        else:
+            updated = [command]
+        self.agent_service.update_status(branch, metadata={"pending_confirmation": updated})
 
     def _should_process(self, branch: str) -> bool:
         last = self._last_command_at.get(branch)

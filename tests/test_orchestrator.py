@@ -71,8 +71,10 @@ def test_orchestrator_injects_commands(tmp_path):
             summary="ok",
             notify="please confirm",
             requires_confirmation=True,
+            phase="executing",
+            blockers=("waiting on secrets",),
             commands=(
-                CommandSuggestion(text="echo hello"),
+                CommandSuggestion(text="echo hello", risk_level="high", cwd="/tmp/work"),
                 CommandSuggestion(text="echo skip"),
             ),
         )
@@ -100,8 +102,12 @@ def test_orchestrator_injects_commands(tmp_path):
         assert session is not None
         metadata = session["metadata"]
         assert metadata.get("orchestrator_summary") == "ok"
+        assert metadata.get("phase") == "executing"
+        assert metadata.get("blockers") == ["waiting on secrets"]
+        assert metadata.get("orchestrator_last_command") == ["echo hello", "echo skip"]
         assert "orchestrator_heartbeat" in metadata
         assert metadata.get("history_summaries") == ["ok"]
+        assert metadata.get("pending_confirmation") == ["echo hello"]
 
         notifications = _read_jsonl(bus.notifications_path)
         assert notifications, "notification should be written"
@@ -112,6 +118,8 @@ def test_orchestrator_injects_commands(tmp_path):
                 summary="second",
                 notify=None,
                 requires_confirmation=False,
+                phase="verifying",
+                blockers=(),
                 commands=(CommandSuggestion(text="echo second"),),
             )
         ]

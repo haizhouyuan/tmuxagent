@@ -33,6 +33,10 @@ class PromptConfig(BaseModel):
         return PromptConfig(**expanded)
 
 
+def _expand_path(base: Path, value: Path) -> Path:
+    return value if value.is_absolute() else (base / value).resolve()
+
+
 class CodexConfig(BaseModel):
     """Codex CLI invocation details."""
 
@@ -50,12 +54,18 @@ class OrchestratorConfig(BaseModel):
     max_commands_per_cycle: int = 2
     history_lines: int = 400
     prompts: PromptConfig = Field(default_factory=PromptConfig)
+    phase_prompts: dict[str, Path] = Field(default_factory=dict)
+    default_phase: str = "planning"
     codex: CodexConfig = Field(default_factory=CodexConfig)
     notify_only_on_confirmation: bool = True
 
     def expand_paths(self, base: Path) -> "OrchestratorConfig":
         clone = self.model_copy(deep=True)
         clone.prompts = self.prompts.expand(base)
+        clone.phase_prompts = {
+            phase: _expand_path(base, path)
+            for phase, path in self.phase_prompts.items()
+        }
         return clone
 
 
