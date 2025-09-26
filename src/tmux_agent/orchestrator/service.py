@@ -398,19 +398,15 @@ class OrchestratorService:
         self,
         payload: dict[str, Any],
         branch: str | None = None,
-        *,
-        force: bool = False,
     ) -> bool:
         session = payload.get("session")
-        if session and force:
-            self._session_busy_until.pop(session, None)
-        if session and not force and not self._can_send_session(session):
+        if session and not self._can_send_session(session):
             entry = self._queue_command(session, payload, branch)
             if branch and entry.get("summary"):
                 self._update_branch_queue(branch, add=entry["summary"])
             metrics.record_command("queued")
             return False
-        self._dispatch_command(payload, branch, queued=False, force=force)
+        self._dispatch_command(payload, branch, queued=False)
         return True
 
     def _dispatch_command(
@@ -419,7 +415,6 @@ class OrchestratorService:
         branch: str | None,
         *,
         queued: bool,
-        force: bool = False,
     ) -> None:
         now = time.time()
         session = payload.get("session")
@@ -624,7 +619,10 @@ class OrchestratorService:
             if command_text and item.get("text") != command_text:
                 remaining.append(item)
                 continue
-            self._enqueue_command(item, branch, force=True)
+            session_name = item.get("session")
+            if session_name:
+                self._session_busy_until.pop(session_name, None)
+            self._enqueue_command(item, branch)
             executed = True
         updates: dict[str, Any] = {"pending_confirmation": remaining}
         if response_meta:

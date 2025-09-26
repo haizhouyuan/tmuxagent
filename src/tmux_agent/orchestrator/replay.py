@@ -42,6 +42,7 @@ def summarize_events(events: Iterable[dict]) -> Mapping[str, object]:
     last_ts: float | None = None
     queued: int = 0
     max_queue: int = 0
+    tracked_queue_ids: set[str] = set()
 
     for event in events:
         event_type = event.get("event") or "unknown"
@@ -54,12 +55,27 @@ def summarize_events(events: Iterable[dict]) -> Mapping[str, object]:
         if event_type == "command":
             payload = event.get("payload") or {}
             last_command = payload.get("text") or last_command
+            meta = payload.get("meta") or {}
+            queue_id = meta.get("queue_id")
+            if queue_id and queue_id in tracked_queue_ids:
+                tracked_queue_ids.discard(queue_id)
+                queued = max(0, queued - 1)
+            elif event.get("queued"):
+                queued = max(0, queued - 1)
         if event_type == "queued":
+            meta = (event.get("payload") or {}).get("meta") or {}
+            queue_id = meta.get("queue_id")
+            if queue_id:
+                tracked_queue_ids.add(queue_id)
             queued += 1
             max_queue = max(max_queue, queued)
         if event_type == "confirmation":
             queued = max(0, queued - 1)
         if event_type == "pending_confirmation":
+            meta = (event.get("payload") or {}).get("meta") or {}
+            queue_id = meta.get("queue_id")
+            if queue_id:
+                tracked_queue_ids.add(queue_id)
             queued += 1
             max_queue = max(max_queue, queued)
         if event_type == "summary":
