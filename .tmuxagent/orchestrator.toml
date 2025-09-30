@@ -18,10 +18,10 @@ stall_retries_before_notify = 2
 failure_alert_threshold = 3
 
 [codex]
-bin = "/home/yuanhaizhou/.local/bin/codex-gac"
+bin = "/home/yuanhaizhou/projects/tmuxagent-worktrees/fleetai/scripts/codex_deepseek_cli.py"
 timeout = 120.0
-extra_args = ["key", "--dangerously-bypass-approvals-and-sandbox"]
-env = { PATH = "/home/yuanhaizhou/.local/bin:/home/yuanhaizhou/.nvm/versions/node/v20.19.5/bin:/usr/local/bin:/usr/bin:/bin", HOME = "/home/yuanhaizhou" }
+extra_args = []
+env = { PATH = "/usr/local/bin:/usr/bin:/bin", HOME = "/home/yuanhaizhou" }
 
 [prompts]
 command = "prompts/command.md"
