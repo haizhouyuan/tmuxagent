@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import os
 from dataclasses import dataclass, field
 from typing import Any
 from typing import Iterable
 from typing import Mapping
 from typing import Sequence
-from typing import Any
 
 
 class CodexError(RuntimeError):
@@ -108,10 +108,11 @@ class CodexClient:
         if prompt and not prompt.endswith("\n\n"):
             payload = f"{payload}\n\n"
         try:
+            env = {**os.environ, **self._env, **self._default_env()}
             proc = subprocess.run(
                 self._executable,
                 input=payload,
-                env={**self._env, **self._default_env()},
+                env=env,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
