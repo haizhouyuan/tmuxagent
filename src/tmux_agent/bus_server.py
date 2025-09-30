@@ -1,8 +1,11 @@
 """FastAPI app for mobile-friendly local agent portal."""
 from __future__ import annotations
 
+import json
 import os
 import textwrap
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from typing import Optional
@@ -25,6 +28,7 @@ from .tmux import TmuxAdapter
 class CommandPayload(BaseModel):
     text: str
     session: str | None = None
+    branch: str | None = None
     host: str | None = None
     enter: bool = True
     sender: str | None = None
@@ -55,6 +59,13 @@ def create_app(*, config: AgentConfig, bus: LocalBus, auth_token: str | None = N
         for host in config.hosts
     ]
 
+    status_dir = Path.home().expanduser() / ".tmux_agent" / "status"
+    digest_path = status_dir / "storyapp-digest.json"
+    alerts_path = Path.home().expanduser() / ".tmux_agent" / "alerts.log"
+    cache_ttl_seconds = 10.0
+    digest_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+    alerts_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+
     def capture_session_tail(session_name: str, lines: int = 200) -> str:
         for adapter in adapters:
             try:
@@ -83,6 +94,55 @@ def create_app(*, config: AgentConfig, bus: LocalBus, auth_token: str | None = N
         finally:
             store.close()
         return rows
+
+    def _load_storyapp_digest(force: bool = False) -> dict[str, Any]:
+        now = time.time()
+        if not force and digest_cache["data"] is not None and now - digest_cache["ts"] < cache_ttl_seconds:
+            return digest_cache["data"]  # type: ignore[return-value]
+        try:
+            raw = digest_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            digest: dict[str, Any] = {"generated_at": None, "agents": {}}
+        else:
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                digest = {"generated_at": None, "agents": {}, "error": "invalid digest json"}
+            else:
+                if isinstance(loaded, dict):
+                    digest = loaded
+                else:
+                    digest = {"generated_at": None, "agents": {}, "value": loaded}
+        digest_cache["ts"] = now
+        digest_cache["data"] = digest
+        return digest
+
+    def _load_storyapp_alerts(limit: int = 50, force: bool = False) -> list[dict[str, Any]]:
+        limit = max(limit, 0)
+        now = time.time()
+        cached_items = alerts_cache.get("data") if isinstance(alerts_cache.get("data"), list) else None
+        if not force and cached_items is not None and now - alerts_cache["ts"] < cache_ttl_seconds:
+            return cached_items if not limit else cached_items[-limit:]
+        try:
+            lines = alerts_path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            parsed: list[dict[str, Any]] = []
+        else:
+            parsed = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                if line.startswith("[") and "]" in line:
+                    timestamp, message = line.split("]", 1)
+                    ts = timestamp.lstrip("[").strip()
+                    body = message.strip()
+                else:
+                    ts = None
+                    body = line.strip()
+                parsed.append({"timestamp": ts, "message": body})
+        alerts_cache["ts"] = now
+        alerts_cache["data"] = parsed
+        return parsed if not limit else parsed[-limit:]
 
     @app.get("/", response_class=HTMLResponse)
     async def root() -> str:
@@ -401,6 +461,39 @@ setInterval(fetchSessions, 8000);
         ]
         return JSONResponse({"items": items})
 
+    @app.get("/api/storyapp/digest")
+    async def api_storyapp_digest(
+        branch: str | None = None,
+        force: bool = False,
+        _: None = Depends(require_token),
+    ) -> JSONResponse:
+        digest = _load_storyapp_digest(force=force)
+        response_digest = digest
+        if branch:
+            agents = digest.get("agents", {}) if isinstance(digest, dict) else {}
+            agent_payload = agents.get(branch)
+            filtered = dict(digest) if isinstance(digest, dict) else {"generated_at": None, "agents": {}}
+            filtered["agents"] = {branch: agent_payload} if agent_payload else {}
+            response_digest = filtered
+        payload = {
+            "digest": response_digest,
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return JSONResponse(payload)
+
+    @app.get("/api/storyapp/alerts")
+    async def api_storyapp_alerts(
+        limit: int = 50,
+        force: bool = False,
+        _: None = Depends(require_token),
+    ) -> JSONResponse:
+        items = _load_storyapp_alerts(limit=limit, force=force)
+        payload = {
+            "items": items,
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return JSONResponse(payload)
+
     @app.get("/api/sessions")
     async def api_sessions(_: None = Depends(require_token)) -> JSONResponse:
         rows = fetch_state_rows(
@@ -472,6 +565,14 @@ setInterval(fetchSessions, 8000);
             raise HTTPException(status_code=400, detail="text is required")
         record = payload.model_dump()
         record.setdefault("sender", "mobile")
+        if record.get("branch") and not record.get("session"):
+            digest = _load_storyapp_digest()
+            agents = digest.get("agents", {}) if isinstance(digest, dict) else {}
+            agent_info = agents.get(record["branch"])
+            if agent_info and isinstance(agent_info, dict):
+                record["session"] = agent_info.get("session")
+            if not record.get("session"):
+                raise HTTPException(status_code=404, detail="session not found for branch")
         bus.append_command(record)
         return JSONResponse({"status": "ok"})
 

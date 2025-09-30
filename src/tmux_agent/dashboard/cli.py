@@ -13,8 +13,8 @@ from .config import DashboardConfig
 def main() -> None:
     parser = argparse.ArgumentParser(description="tmux-agent dashboard server")
     parser.add_argument("--db", type=Path, default=Path("~/.tmux_agent/state.db"), help="Path to SQLite state database")
-    parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
-    parser.add_argument("--port", type=int, default=8700, help="Port to listen on")
+    parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind")
+    parser.add_argument("--port", type=int, default=8701, help="Port to listen on")
     parser.add_argument(
         "--templates",
         type=Path,

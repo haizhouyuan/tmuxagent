@@ -151,8 +151,40 @@ class Runner:
             self.state_store.set_bus_offset('commands', new_offset)
 
     def _execute_command(self, payload: dict[str, Any]) -> None:
-        text = (payload.get('text') or payload.get('command') or '').strip()
-        if not text:
+        meta = payload.get('meta') or {}
+        input_mode = meta.get('input_mode')
+        keys_payload = payload.get('keys')
+
+        keys: list[str] | None = None
+         
+        if isinstance(keys_payload, str):
+            normalized = keys_payload.strip()
+            keys = [normalized] if normalized else []
+        elif isinstance(keys_payload, Iterable):
+            keys = []
+            for item in keys_payload:
+                if not isinstance(item, str):
+                    item = str(item)
+                normalized = item.strip()
+                if normalized:
+                    keys.append(normalized)
+            if not keys:
+                keys = []
+
+        text_field = payload.get('text')
+        fallback_command = payload.get('command')
+        if isinstance(text_field, str):
+            text = text_field
+        else:
+            text = ''
+        if not text and isinstance(fallback_command, str):
+            text = fallback_command
+
+        # Shell mode strips whitespace, Codex 对话保持原样
+        if input_mode != 'codex_dialogue':
+            text = text.strip()
+
+        if (not text) and (not keys):
             return
         target_host = payload.get('host')
         session = payload.get('session')
@@ -183,13 +215,27 @@ class Runner:
         if not pane_target:
             raise RuntimeError(f"未找到可用窗格用于执行命令 (session={session!r})")
 
-        if not self.dry_run:
-            runtime.adapter.send_keys(pane_target, text, enter=enter)
+        if self.dry_run:
+            logger.debug('[dry-run] command skipped: %s', text or keys)
+        else:
+            if keys:
+                # 默认不自动回车，除非显式指定
+                runtime.adapter.send_keys(
+                    pane_target,
+                    keys,
+                    enter=payload.get('enter', False),
+                )
+            else:
+                runtime.adapter.send_keys(
+                    pane_target,
+                    text,
+                    enter=payload.get('enter', True),
+                )
 
         self.notifier.send(
             NotificationMessage(
                 title='指令已注入',
-                body=f"{payload.get('sender', 'local')} -> {session or pane_target}: {text}",
+                body=f"{payload.get('sender', 'local')} -> {session or pane_target}: {text or keys}",
             )
         )
 

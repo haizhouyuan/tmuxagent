@@ -1,0 +1,70 @@
+poll_interval = 45.0
+cooldown_seconds = 120.0
+max_commands_per_cycle = 2
+history_lines = 160
+session_cooldown_seconds = 20.0
+default_phase = "planning"
+completion_phase = "done"
+notify_only_on_confirmation = true
+dry_run = false
+metrics_port = 9108
+metrics_host = "0.0.0.0"
+command_timeout_seconds = 45.0
+delegate_to_codex = false
+
+# Enhanced stall and failure detection parameters
+stall_timeout_seconds = 30.0
+stall_retries_before_notify = 2
+failure_alert_threshold = 3
+
+[codex]
+bin = "/home/yuanhaizhou/.local/bin/codex-gac"
+timeout = 120.0
+extra_args = ["key", "--dangerously-bypass-approvals-and-sandbox"]
+env = { PATH = "/home/yuanhaizhou/.local/bin:/home/yuanhaizhou/.nvm/versions/node/v20.19.5/bin:/usr/local/bin:/usr/bin:/bin", HOME = "/home/yuanhaizhou" }
+
+[prompts]
+command = "prompts/command.md"
+summary = "prompts/summary.md"
+delegate = "prompts/command_delegate.md"
+stuck_detection = "prompts/stuck_detection.md"
+
+[[tasks]]
+branch = "weather/bot"
+title = "Weather Bot Development"
+depends_on = []
+responsible = "orchestrator"
+phases = ["planning", "implementing", "testing", "done"]
+tags = ["api", "bot", "weather"]
+
+[[tasks]]
+branch = "storyapp/ci-hardening"
+title = "StoryApp CI 稳定性"
+depends_on = []
+responsible = "orchestrator"
+phases = ["planning", "executing", "verifying", "done"]
+tags = ["storyapp", "ci", "quality"]
+
+[[tasks]]
+branch = "storyapp/orchestrator"
+title = "StoryApp Orchestrator 强化"
+depends_on = ["storyapp/ci-hardening"]
+responsible = "orchestrator"
+phases = ["planning", "implementing", "verifying", "done"]
+tags = ["storyapp", "orchestrator", "automation"]
+
+[[tasks]]
+branch = "storyapp/tts-delivery"
+title = "StoryApp TTS 交付"
+depends_on = []
+responsible = "ai"
+phases = ["planning", "integration", "qa", "done"]
+tags = ["storyapp", "tts", "audio"]
+
+[[tasks]]
+branch = "storyapp/mongo-launch"
+title = "StoryApp MongoDB 快速上线"
+depends_on = []
+responsible = "ai"
+phases = ["planning", "hardening", "verifying", "done"]
+tags = ["storyapp", "mongodb", "infrastructure"]

@@ -168,6 +168,21 @@ class Notifier:
             return
         logger.warning("Notification channel '%s' disabled: %s", channel, reason)
         self._disabled_channels.add(channel)
+        if self.bus:
+            payload = {
+                "title": "通知通道已降级",
+                "body": f"channel={channel} disabled: {reason}",
+                "source": "notifier",
+                "meta": {
+                    "severity": "warning",
+                    "kind": "channel_disabled",
+                    "channel": channel,
+                },
+            }
+            try:
+                self.bus.append_notification(payload)
+            except Exception:  # pragma: no cover - best effort
+                logger.debug("Failed to append local bus notification for channel disable")
 
 
 class MockNotifier(Notifier):

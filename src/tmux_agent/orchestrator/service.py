@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from ..notify import Notifier
 from ..notify import NotificationMessage
 from ..state import StateStore
 from .codex_client import CodexClient
+from .codex_client import CodexError
 from .codex_client import OrchestratorDecision
 from .config import OrchestratorConfig
 from .config import TaskSpec
@@ -28,6 +30,23 @@ from .decomposer import decompose_requirements
 from .insights import build_recommendations
 
 logger = logging.getLogger(__name__)
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]|[@-Z\\-_]")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B-\x1F\x7F]")
+_SPINNER_PREFIXES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠛", "⠓")
+_PROMPT_SNIPPETS = (
+    "⏎ send",
+    "Ctrl+J newline",
+    "Ctrl+T transcript",
+    "Ctrl+C quit",
+    "Alt+↑ edit",
+)
+
+_CODE_BLOCK_RE = re.compile(r"```(?:bash)?\n(.*?)```", re.DOTALL)
+
+ERROR_REPEAT_NOTIFY_THRESHOLD = 3
+ERROR_SUPPRESSION_WINDOW_SECONDS = 300
 
 
 @dataclass
@@ -64,11 +83,21 @@ class OrchestratorService:
         self.notifier = notifier
         self.codex = codex
         self.config = config
+        self._delegate_mode = config.delegate_to_codex
         self._phase_prompts = {
             phase: path
             for phase, path in config.phase_prompts.items()
             if path.exists()
         }
+        self._stuck_prompt_path = (
+            config.prompts.stuck_detection
+            if config.prompts.stuck_detection and config.prompts.stuck_detection.exists()
+            else None
+        )
+        if self._stuck_prompt_path:
+            logger.debug("Stuck detection prompt loaded: %s", self._stuck_prompt_path)
+        else:
+            logger.debug("Stuck detection prompt not configured or missing")
         self._last_command_at: dict[str, float] = {}
         self._session_busy_until: dict[str, float] = {}
         self._session_queue: dict[str, list[dict[str, Any]]] = {}
@@ -82,6 +111,37 @@ class OrchestratorService:
         self._command_tracker_limit = COMMAND_HISTORY_LIMIT
         self._stall_counts: dict[str, int] = {}
         self._failure_alert_state: dict[str, int] = {}
+        self._error_state: dict[str, dict[str, Any]] = {}
+        self._fallback_sequences: dict[str, list[dict[str, Any]]] = {
+            "storyapp/ci-hardening": [
+                {"keys": ["Escape"], "enter": False},
+                {"text": "bash -lc 'find docs -mindepth 1 -maxdepth 1 -printf \"%f\\n\" 2>&1 || ( echo \"[WARN] find 失败，尝试 ls\"; ls -la --group-directories-first --color=never docs 2>&1 )'"},
+                {"text": "DONE"},
+            ],
+            "storyapp/tts-delivery": [
+                {"keys": ["Escape"], "enter": False},
+                {"text": "继续"},
+                {"text": "DONE"},
+                {"text": "bash -lc 'git status -sb 2>&1'"},
+                {"text": "DONE"},
+                {"keys": ["Escape"], "enter": False},
+                {"text": "bash -lc 'find backend/src/services/tts -mindepth 1 -maxdepth 1 -printf \"%f\\n\" 2>&1 || ( echo \"[WARN] find 失败，尝试 ls\"; ls -la --group-directories-first --color=never backend/src/services/tts 2>&1 )'"},
+                {"text": "DONE"},
+            ],
+            "storyapp/mongo-launch": [
+                {"keys": ["Escape"], "enter": False},
+                {"text": "继续"},
+                {"text": "DONE"},
+            ],
+            "storyapp/orchestrator": [
+                {"keys": ["Escape"], "enter": False},
+                {"text": "bash -lc 'python3 ~/.tmux_agent/scripts/storyapp_digest.py --interval 0 | tail -n 10 2>&1'"},
+                {"text": "DONE"},
+                {"keys": ["Escape"], "enter": False},
+                {"text": "bash -lc 'tail -n 20 ~/.tmux_agent/alerts.log 2>&1'"},
+                {"text": "DONE"},
+            ],
+        }
 
     def run_forever(self) -> None:  # pragma: no cover - integration flow
         interval = self.config.poll_interval
@@ -104,6 +164,7 @@ class OrchestratorService:
             self._maybe_rotate_log(snapshot.record.log_path)
             self._maybe_decompose_requirements(snapshot)
             self._maybe_generate_summary(snapshot)
+            self._ensure_dialogue_health(snapshot, now_ts)
             self._detect_and_handle_stall(snapshot, now_ts)
             self._handle_repeated_failures(snapshot, now_ts)
             if self._should_process(snapshot):
@@ -111,8 +172,31 @@ class OrchestratorService:
                 start_time = time.perf_counter()
                 try:
                     decision = self.codex.run(prompt)
-                except Exception as exc:
+                except CodexError as exc:
                     logger.error("Codex execution failed for %s: %s", snapshot.branch, exc)
+                    self._record_error(
+                        snapshot,
+                        str(exc),
+                        kind=exc.kind,
+                        raw_payload=getattr(exc, "raw", None),
+                    )
+                    fallback = self._fallback_command_for(snapshot)
+                    if fallback is not None:
+                        dispatched = self._enqueue_command(fallback, snapshot.branch)
+                        if dispatched:
+                            snapshot.metadata["fallback_active"] = True
+                            self.agent_service.update_status(
+                                snapshot.branch,
+                                metadata={
+                                    "orchestrator_last_command": [
+                                        fallback.get("text") or " ".join(fallback.get("keys", []))
+                                    ],
+                                    "fallback_active": True,
+                                },
+                            )
+                    continue
+                except Exception as exc:  # pragma: no cover - unexpected errors
+                    logger.exception("Unexpected Codex failure for %s", snapshot.branch)
                     self._record_error(snapshot, str(exc))
                     continue
                 metrics.observe_decision_latency(time.perf_counter() - start_time)
@@ -157,7 +241,12 @@ class OrchestratorService:
         except FileNotFoundError:
             return ""
         lines = data.splitlines()
-        return "\n".join(lines[-self.config.history_lines :])
+        if not lines:
+            return ""
+        history_limit = max(1, int(self.config.history_lines or 0))
+        window = history_limit * 4
+        excerpt = "\n".join(lines[-window:]) if window > 0 else data
+        return self._sanitize_log_excerpt(excerpt, limit=history_limit)
 
     def _maybe_rotate_log(self, log_path: Optional[Path]) -> None:
         if not log_path or not log_path.exists():
@@ -177,6 +266,27 @@ class OrchestratorService:
         except OSError:
             pass
         log_path.write_text("\n".join(lines[-keep_lines:]) + "\n", encoding="utf-8")
+
+    def _sanitize_log_excerpt(self, text: str, *, limit: int | None = None) -> str:
+        if not text:
+            return ""
+        normalized = _ANSI_ESCAPE_RE.sub("", text)
+        normalized = _CONTROL_CHAR_RE.sub("", normalized)
+        normalized = normalized.replace("\r", "")
+        cleaned_lines: list[str] = []
+        for raw_line in normalized.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                cleaned_lines.append("")
+                continue
+            if any(stripped.startswith(prefix) for prefix in _SPINNER_PREFIXES):
+                continue
+            if any(snippet in raw_line for snippet in _PROMPT_SNIPPETS):
+                continue
+            cleaned_lines.append(raw_line.rstrip())
+        if limit is not None and limit > 0:
+            cleaned_lines = cleaned_lines[-limit:]
+        return "\n".join(cleaned_lines).strip("\n")
 
     def _maybe_generate_summary(self, snapshot: AgentSnapshot) -> None:
         summary_prompt_path = self.config.prompts.summary
@@ -203,6 +313,46 @@ class OrchestratorService:
             snapshot.branch,
             metadata={"history_summaries": history},
         )
+
+    def _ensure_dialogue_health(self, snapshot: AgentSnapshot, now_ts: int) -> dict[str, Any] | None:
+        if not self._stuck_prompt_path or not self._is_codex_dialogue_session(snapshot):
+            return None
+        last = snapshot.metadata.get("dialogue_health_ts")
+        if isinstance(last, (int, float)) and (now_ts - last) < max(60, int(self.config.poll_interval)):
+            cached = snapshot.metadata.get("dialogue_health")
+            return cached if isinstance(cached, dict) else None
+        prompt_template = self._stuck_prompt_path.read_text(encoding="utf-8")
+        metadata_json = json.dumps(snapshot.metadata, ensure_ascii=False, indent=2, default=str)
+        prompt = prompt_template.format(
+            branch=snapshot.branch,
+            session=snapshot.session,
+            metadata=metadata_json,
+            log_excerpt=snapshot.log_excerpt,
+        )
+        try:
+            raw = self.codex.run_raw(prompt)
+        except CodexError as exc:
+            logger.debug("Dialogue health check failed for %s: %s", snapshot.branch, exc)
+            result = {
+                "stuck": False,
+                "reason": f"model_error:{exc.kind}",
+            }
+        else:
+            result = {
+                "stuck": bool(raw.get("stuck")),
+                "reason": str(raw.get("reason") or ""),
+            }
+            suggestion = raw.get("suggestion")
+            if isinstance(suggestion, str) and suggestion.strip():
+                result["suggestion"] = suggestion.strip()
+        updates = {
+            "dialogue_health": result,
+            "dialogue_health_ts": now_ts,
+        }
+        self.agent_service.update_status(snapshot.branch, metadata=updates)
+        snapshot.metadata.update(updates)
+        logger.debug("Dialogue health for %s: %s", snapshot.branch, result)
+        return result
 
     def _apply_task_plan(self, record: AgentRecord, metadata: dict[str, Any]) -> dict[str, Any]:
         plan = self._task_plan.get(record.branch)
@@ -278,6 +428,14 @@ class OrchestratorService:
         current_phase = str(snapshot.metadata.get("phase") or self.config.default_phase)
         prompt_path = self._phase_prompts.get(current_phase, self.config.prompts.command)
         command_template = prompt_path.read_text(encoding="utf-8")
+        if self._delegate_mode:
+            delegate_path = self.config.prompts.delegate
+            if not delegate_path:
+                candidate = prompt_path.parent / "command_delegate.md"
+            else:
+                candidate = delegate_path
+            if candidate.exists():
+                command_template = candidate.read_text(encoding="utf-8")
         summary_template = (
             self.config.prompts.summary.read_text(encoding="utf-8")
             if self.config.prompts.summary and self.config.prompts.summary.exists()
@@ -300,6 +458,7 @@ class OrchestratorService:
     def _handle_decision(self, snapshot: AgentSnapshot, decision: OrchestratorDecision) -> None:
         logger.debug("Decision for %s: %s", snapshot.branch, decision)
         phase_history_updates: list[str] | None = None
+        had_error = bool(snapshot.metadata.get("orchestrator_error"))
         if decision.phase:
             existing_history = snapshot.metadata.get("phase_history")
             if isinstance(existing_history, list):
@@ -314,13 +473,23 @@ class OrchestratorService:
             or snapshot.metadata.get("phase")
             or self.config.default_phase
         )
+        delegate_mode = self._delegate_mode
         if decision.summary:
             meta_payload: dict[str, Any] = {
                 "orchestrator_summary": decision.summary,
-                "orchestrator_last_command": [cmd.text for cmd in decision.commands],
+                "orchestrator_last_command": []
+                if delegate_mode
+                else [cmd.text for cmd in decision.commands],
                 "phase": target_phase,
                 "blockers": list(decision.blockers) if decision.blockers else [],
             }
+            if had_error:
+                meta_payload["orchestrator_error"] = None
+                meta_payload["orchestrator_error_payload"] = None
+            if delegate_mode and decision.extra:
+                actions = decision.extra.get("actions")
+                if isinstance(actions, list):
+                    meta_payload["delegate_actions"] = actions
             if phase_history_updates is not None:
                 meta_payload["phase_history"] = phase_history_updates
             self.agent_service.update_status(
@@ -329,6 +498,10 @@ class OrchestratorService:
                 metadata=meta_payload,
             )
             snapshot.metadata.update(meta_payload)
+            if had_error:
+                snapshot.metadata.pop("orchestrator_error", None)
+                snapshot.metadata.pop("orchestrator_error_payload", None)
+                had_error = False
         elif decision.phase or decision.blockers or phase_history_updates is not None:
             meta_updates: dict[str, Any] = {}
             if decision.phase:
@@ -337,9 +510,16 @@ class OrchestratorService:
                 meta_updates["blockers"] = list(decision.blockers)
             if phase_history_updates is not None:
                 meta_updates["phase_history"] = phase_history_updates
+            if had_error:
+                meta_updates["orchestrator_error"] = None
+                meta_updates["orchestrator_error_payload"] = None
             if meta_updates:
                 self.agent_service.update_status(snapshot.branch, metadata=meta_updates)
                 snapshot.metadata.update(meta_updates)
+                if had_error:
+                    snapshot.metadata.pop("orchestrator_error", None)
+                    snapshot.metadata.pop("orchestrator_error_payload", None)
+                    had_error = False
         else:
             if phase_history_updates is not None:
                 self.agent_service.update_status(
@@ -349,47 +529,72 @@ class OrchestratorService:
                 snapshot.metadata["phase_history"] = phase_history_updates
         confirmation_required = decision.requires_confirmation
         pending_payloads: list[dict[str, Any]] = []
-        if decision.has_commands:
+        if decision.has_commands and delegate_mode:
+            logger.debug(
+                "Delegate mode active, skipping direct execution of suggestions: %s",
+                [cmd.text or cmd.keys for cmd in decision.commands],
+            )
+            if decision.commands:
+                suggestions = [cmd.text for cmd in decision.commands]
+                snapshot.metadata["delegate_suggestions"] = suggestions
+                self.agent_service.update_status(
+                    snapshot.branch,
+                    metadata={"delegate_suggestions": suggestions},
+                )
+        if decision.has_commands and not delegate_mode:
             sent = 0
             dispatched_texts: list[str] = []
             for command in decision.commands:
+                expanded_commands = self._expand_dialogue_command(command)
+                if not expanded_commands:
+                    continue
+                for expanded in expanded_commands:
+                    if sent >= self.config.max_commands_per_cycle:
+                        break
+                    target_session = expanded.session or snapshot.session
+                    risk_level = expanded.risk_level
+                    requires_manual = confirmation_required or risk_level in {"high", "critical"}
+                    if requires_manual:
+                        confirmation_required = True
+                    meta = {
+                        "risk_level": risk_level,
+                        "phase": decision.phase
+                        or snapshot.metadata.get("phase")
+                        or self.config.default_phase,
+                    }
+                    if expanded.cwd:
+                        meta["cwd"] = expanded.cwd
+                    if expanded.notes:
+                        meta["notes"] = expanded.notes
+                    payload = {
+                        "text": expanded.text or "",
+                        "session": target_session,
+                        "enter": expanded.enter,
+                        "sender": "orchestrator",
+                        "meta": meta,
+                    }
+                    if expanded.input_mode:
+                        meta["input_mode"] = expanded.input_mode
+                    if expanded.keys:
+                        payload["keys"] = self._normalize_keys(expanded.keys, expanded.input_mode)
+                    if not payload["text"]:
+                        payload.pop("text")
+                    if requires_manual:
+                        pending_payloads.append(payload)
+                    else:
+                        dispatched = self._enqueue_command(payload, snapshot.branch)
+                        if dispatched:
+                            sent += 1
+                            if expanded.text:
+                                dispatched_texts.append(expanded.text)
+                        else:
+                            queued = self._pending_by_branch.get(snapshot.branch)
+                            if queued:
+                                snapshot.metadata["queued_commands"] = [dict(item) for item in queued]
+                            elif "queued_commands" in snapshot.metadata:
+                                snapshot.metadata["queued_commands"] = []
                 if sent >= self.config.max_commands_per_cycle:
                     break
-                target_session = command.session or snapshot.session
-                risk_level = command.risk_level
-                requires_manual = confirmation_required or risk_level in {"high", "critical"}
-                if requires_manual:
-                    confirmation_required = True
-                meta = {
-                    "risk_level": risk_level,
-                    "phase": decision.phase
-                    or snapshot.metadata.get("phase")
-                    or self.config.default_phase,
-                }
-                if command.cwd:
-                    meta["cwd"] = command.cwd
-                if command.notes:
-                    meta["notes"] = command.notes
-                payload = {
-                    "text": command.text,
-                    "session": target_session,
-                    "enter": command.enter,
-                    "sender": "orchestrator",
-                    "meta": meta,
-                }
-                if requires_manual:
-                    pending_payloads.append(payload)
-                else:
-                    dispatched = self._enqueue_command(payload, snapshot.branch)
-                    if dispatched:
-                        sent += 1
-                        dispatched_texts.append(command.text)
-                    else:
-                        queued = self._pending_by_branch.get(snapshot.branch)
-                        if queued:
-                            snapshot.metadata["queued_commands"] = [dict(item) for item in queued]
-                        elif "queued_commands" in snapshot.metadata:
-                            snapshot.metadata["queued_commands"] = []
             if not decision.summary and dispatched_texts:
                 existing_cmds = snapshot.metadata.get("orchestrator_last_command")
                 if isinstance(existing_cmds, list):
@@ -403,6 +608,34 @@ class OrchestratorService:
                     metadata={"orchestrator_last_command": merged_cmds},
                 )
                 snapshot.metadata["orchestrator_last_command"] = merged_cmds
+        if not delegate_mode and not decision.has_commands:
+            health = self._ensure_dialogue_health(snapshot, int(time.time()))
+            should_fallback = True
+            if health is not None and not bool(health.get("stuck")):
+                should_fallback = False
+                logger.debug("Skipping fallback for %s (dialogue healthy)", snapshot.branch)
+            if should_fallback:
+                fallback_payload = self._fallback_command_for(snapshot)
+                if fallback_payload is not None:
+                    dispatched = self._enqueue_command(fallback_payload, snapshot.branch)
+                    if dispatched:
+                        self.agent_service.update_status(
+                            snapshot.branch,
+                            metadata={
+                                "orchestrator_last_command": [
+                                    fallback_payload.get("text")
+                                    or " ".join(fallback_payload.get("keys", []))
+                                ],
+                                "fallback_active": True,
+                            },
+                        )
+                        snapshot.metadata["fallback_active"] = True
+        elif snapshot.metadata.get("fallback_active"):
+            snapshot.metadata.pop("fallback_active", None)
+            self.agent_service.update_status(
+                snapshot.branch,
+                metadata={"fallback_active": False},
+            )
         for payload in pending_payloads:
             self._record_pending_confirmation(snapshot.branch, payload)
         queued_view = self._pending_by_branch.get(snapshot.branch)
@@ -410,6 +643,17 @@ class OrchestratorService:
             snapshot.metadata["queued_commands"] = [dict(item) for item in queued_view]
         elif "queued_commands" in snapshot.metadata:
             snapshot.metadata["queued_commands"] = []
+        if had_error:
+            self.agent_service.update_status(
+                snapshot.branch,
+                metadata={
+                    "orchestrator_error": None,
+                    "orchestrator_error_payload": None,
+                },
+            )
+            snapshot.metadata.pop("orchestrator_error", None)
+            snapshot.metadata.pop("orchestrator_error_payload", None)
+            had_error = False
         should_notify = decision.notify and (
             not self.config.notify_only_on_confirmation
             or confirmation_required
@@ -446,6 +690,53 @@ class OrchestratorService:
         self._dispatch_command(payload, branch, queued=False)
         return True
 
+    def _fallback_command_for(self, snapshot: AgentSnapshot) -> dict[str, Any] | None:
+        branch = snapshot.branch
+        sequence = self._fallback_sequences.get(branch)
+        if not sequence:
+            return None
+        metadata = snapshot.metadata
+        idx = metadata.get("fallback_index", 0)
+        if not isinstance(idx, int) or idx < 0:
+            idx = 0
+        if idx >= len(sequence):
+            return None
+        entry = sequence[idx]
+        text = entry.get("text") if isinstance(entry, dict) else str(entry)
+        keys = entry.get("keys") if isinstance(entry, dict) else None
+        enter_flag = entry.get("enter") if isinstance(entry, dict) and "enter" in entry else True
+        if keys and isinstance(keys, list):
+            normalized_keys = [str(item) for item in keys if str(item).strip()]
+        else:
+            normalized_keys = []
+        instruction = text.strip() if isinstance(text, str) else ""
+        if not instruction and not normalized_keys:
+            return None
+        payload = {
+            "session": snapshot.session,
+            "enter": enter_flag if isinstance(enter_flag, bool) else True,
+            "sender": "orchestrator",
+            "meta": {
+                "risk_level": "low",
+                "input_mode": "codex_dialogue",
+                "fallback": True,
+                "fallback_index": idx,
+            },
+        }
+        if instruction:
+            payload["text"] = instruction
+        if normalized_keys:
+            payload["keys"] = normalized_keys
+            if "text" not in payload:
+                # 默认在发送热键时不自动回车
+                payload["enter"] = False
+        metadata["fallback_index"] = idx + 1
+        self.agent_service.update_status(
+            branch,
+            metadata={"fallback_index": idx + 1},
+        )
+        return payload
+
     def _dispatch_command(
         self,
         payload: dict[str, Any],
@@ -455,9 +746,21 @@ class OrchestratorService:
     ) -> None:
         now = time.time()
         session = payload.get("session")
+        meta = payload.setdefault("meta", {})
+        input_mode = meta.get("input_mode")
+        keys = payload.get("keys")
+        codex_dialogue = isinstance(input_mode, str) and input_mode == "codex_dialogue"
+        skip_instrumentation = codex_dialogue or bool(keys)
+
         command_id = None
         original_text = None
-        if branch:
+        text = payload.get("text")
+
+        if isinstance(text, str) and text and not skip_instrumentation:
+            hardened = self._harden_command_text(text)
+            if hardened != text:
+                payload["text"] = hardened
+        if branch and not skip_instrumentation:
             command_id, original_text = self._ensure_command_metadata(payload)
             self._apply_command_instrumentation(payload, command_id, original_text)
         if self.config.dry_run:
@@ -525,6 +828,106 @@ class OrchestratorService:
             separator = "" if normalized.endswith(";") else ";"
             payload["text"] = f"{normalized}{separator} {trailer}"
         meta["instrumented"] = True
+
+    def _harden_command_text(self, text: str) -> str:
+        stripped = text.strip()
+        if not stripped:
+            return text
+        timeout = getattr(self.config, "command_timeout_seconds", 0) or 0
+        if timeout <= 0:
+            return stripped
+        lowered = stripped.lower()
+        if "timeout " in lowered or lowered.startswith("timeout"):
+            return stripped
+        if "\n" in stripped or stripped.endswith("\\"):
+            return stripped
+        first_token = stripped.split(None, 1)[0].lower()
+        if first_token in {"cd", "export", "alias", "set", "unset", "source"}:
+            return stripped
+        seconds = max(1, int(round(timeout)))
+        return f"timeout {seconds}s {stripped}"
+
+    def _normalize_keys(self, keys: tuple[str, ...], input_mode: str | None) -> list[str]:
+        normalized: list[str] = []
+        for key in keys:
+            token = str(key).strip()
+            if not token:
+                continue
+            if token.lower() in {"c-c", "ctrl+c", "ctrl-c"} and input_mode == "codex_dialogue":
+                normalized.append("Escape")
+            else:
+                normalized.append(token)
+        return normalized
+
+    def _is_codex_dialogue_session(self, snapshot: AgentSnapshot) -> bool:
+        session_name = snapshot.session or ""
+        if session_name.startswith("agent-storyapp-") or session_name.startswith("agent-weather-"):
+            return True
+        metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+        template = metadata.get("template") if metadata else None
+        return isinstance(template, str) and "storyapp" in template
+
+    def _expand_dialogue_command(self, command: CommandSuggestion) -> list[CommandSuggestion]:
+        if command.input_mode != "codex_dialogue":
+            return [command]
+        text = command.text or ""
+        blocks = _CODE_BLOCK_RE.findall(text)
+        expanded: list[CommandSuggestion] = []
+        include_escape = False
+        lowered = text.lower()
+        if "esc" in lowered or "escape" in lowered or "按 esc" in text or "按下 esc" in text:
+            include_escape = True
+        if include_escape:
+            expanded.append(
+                CommandSuggestion(
+                    text=None,
+                    session=command.session,
+                    enter=False,
+                    cwd=command.cwd,
+                    risk_level=command.risk_level,
+                    notes=command.notes,
+                    keys=("Escape",),
+                    input_mode=command.input_mode,
+                )
+            )
+        if not blocks:
+            if include_escape:
+                return expanded
+            return [command]
+        logger.debug(
+            "Expanding dialogue command for %s with %d code blocks",
+            command.session,
+            len(blocks),
+        )
+        for block in blocks:
+            for line in block.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if stripped.lower() == "echo done":
+                    stripped = "DONE"
+                expanded.append(
+                    CommandSuggestion(
+                        text=stripped,
+                        session=command.session,
+                        enter=True,
+                        cwd=command.cwd,
+                        risk_level=command.risk_level,
+                        notes=command.notes,
+                        input_mode=command.input_mode,
+                    )
+                )
+        return expanded or [command]
+        template_name = str(snapshot.record.template or "")
+        if "storyapp" in template_name.lower() or "codex" in template_name.lower():
+            return True
+        meta_template = snapshot.metadata.get("template")
+        if isinstance(meta_template, str) and "storyapp" in meta_template.lower():
+            return True
+        meta_input_mode = snapshot.metadata.get("input_mode")
+        if isinstance(meta_input_mode, str) and meta_input_mode == "codex_dialogue":
+            return True
+        return False
 
     def _track_command_dispatch(
         self,
@@ -824,17 +1227,49 @@ class OrchestratorService:
             }
         )
 
-    def _record_error(self, snapshot: AgentSnapshot, message: str) -> None:
-        self.agent_service.update_status(
-            snapshot.branch,
-            metadata={"orchestrator_error": message},
-        )
-        metrics.record_error(snapshot.branch)
+    def _record_error(
+        self,
+        snapshot: AgentSnapshot,
+        message: str,
+        *,
+        kind: str = "unknown",
+        raw_payload: str | None = None,
+    ) -> None:
+        branch = snapshot.branch
+        now = time.time()
+        state = self._error_state.get(branch)
+        if state and state.get("message") == message and now - state.get("ts", 0.0) < ERROR_SUPPRESSION_WINDOW_SECONDS:
+            state["count"] = int(state.get("count", 1)) + 1
+        else:
+            state = {"message": message, "count": 1}
+            self._error_state[branch] = state
+        state["ts"] = now
+
+        metadata_update: dict[str, Any] = {"orchestrator_error": message}
+        if raw_payload and kind in {"json_parse_error", "invalid_payload_type"}:
+            metadata_update["orchestrator_error_payload"] = raw_payload[:500]
+        self.agent_service.update_status(branch, metadata=metadata_update)
+
+        metrics.record_error(branch)
+        if kind in {"json_parse_error", "invalid_payload_type", "empty_output"}:
+            metrics.record_json_parse_failure(branch, kind)
+        if kind == "utf8_decode_error":
+            metrics.record_utf8_decode_error(branch)
+
+        if state["count"] > ERROR_REPEAT_NOTIFY_THRESHOLD:
+            logger.debug(
+                "Suppressing repeated orchestrator error for %s (kind=%s, count=%s)",
+                branch,
+                kind,
+                state["count"],
+            )
+            return
+
         self.notifier.send(
             NotificationMessage(
                 title="Orchestrator 异常",
-                body=f"{snapshot.branch}: {message}",
-                meta={"requires_attention": True, "severity": "critical"},
+                body=f"{branch}: {message}",
+                meta={"requires_attention": True, "severity": "critical", "kind": kind},
             )
         )
 

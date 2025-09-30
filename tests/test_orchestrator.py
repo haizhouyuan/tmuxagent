@@ -67,6 +67,7 @@ def test_orchestrator_injects_commands(tmp_path):
         prompts=PromptConfig(command=prompt_path, summary=summary_path),
         codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
         notify_only_on_confirmation=True,
+        command_timeout_seconds=0,
     )
 
     decisions = [
@@ -214,6 +215,7 @@ def test_orchestrator_respects_dependencies(tmp_path):
         completion_phase="done",
         codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
         notify_only_on_confirmation=True,
+        command_timeout_seconds=0,
     )
 
     decisions = [
@@ -324,6 +326,7 @@ def test_orchestrator_detects_stall(tmp_path):
         stall_timeout_seconds=1.0,
         stall_retries_before_notify=1,
         failure_alert_threshold=3,
+        command_timeout_seconds=0,
     )
 
     decisions = [
@@ -404,6 +407,7 @@ def test_orchestrator_flags_repeated_failures(tmp_path):
         codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
         stall_timeout_seconds=999,
         failure_alert_threshold=2,
+        command_timeout_seconds=0,
     )
 
     codex = FakeCodexClient(
@@ -498,6 +502,7 @@ def test_orchestrator_updates_next_actions(tmp_path):
         codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
         stall_timeout_seconds=999,
         failure_alert_threshold=5,
+        command_timeout_seconds=0,
     )
 
     codex = FakeCodexClient(
@@ -574,6 +579,7 @@ def test_orchestrator_decomposes_requirements(tmp_path):
         history_lines=5,
         prompts=PromptConfig(command=prompt_path, summary=None),
         codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
+        command_timeout_seconds=0,
     )
 
     codex = FakeCodexClient(
@@ -645,6 +651,7 @@ def test_orchestrator_applies_task_plan(tmp_path):
                 tags=["high-priority"],
             )
         ],
+        command_timeout_seconds=0,
     )
 
     codex = FakeCodexClient(
@@ -707,6 +714,7 @@ def test_orchestrator_respects_session_cooldown_queue(tmp_path):
         max_commands_per_cycle=5,
         history_lines=5,
         prompts=PromptConfig(command=prompt_path, summary=None),
+        command_timeout_seconds=0,
     )
 
     decision = OrchestratorDecision(
@@ -781,6 +789,7 @@ def test_orchestrator_dry_run_skips_dispatch(tmp_path):
         history_lines=5,
         prompts=PromptConfig(command=prompt_path, summary=None),
         dry_run=True,
+        command_timeout_seconds=0,
     )
 
     decision = OrchestratorDecision(
@@ -808,6 +817,124 @@ def test_orchestrator_dry_run_skips_dispatch(tmp_path):
         session = store.get_agent_session(branch)
         assert session is not None
         assert session["metadata"].get("orchestrator_last_command") == ["echo dry"]
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_applies_timeout_wrapper(tmp_path):
+    log_path = tmp_path / "logs" / "timeout.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("boot\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/timeout"
+    session_name = "agent-storyapp-timeout"
+    _append_agent(store, branch, session_name, log_path)
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=1.0,
+        session_cooldown_seconds=1.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None),
+        command_timeout_seconds=30,
+    )
+
+    decision = OrchestratorDecision(
+        summary=None,
+        notify=None,
+        requires_confirmation=False,
+        phase="executing",
+        blockers=(),
+        commands=(CommandSuggestion(text="ls"),),
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=FakeCodexClient([decision]),
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        commands = _read_jsonl(bus.commands_path)
+        assert len(commands) == 1
+        dispatched = commands[0]["text"]
+        assert dispatched.startswith("timeout 30s ls")
+        assert COMMAND_RESULT_SENTINEL in dispatched
+    finally:
+        service.agent_service.close()
+        store.close()
+
+
+def test_orchestrator_delegate_mode_skips_dispatch(tmp_path):
+    log_path = tmp_path / "logs" / "delegate.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("hello\n", encoding="utf-8")
+
+    store = StateStore(tmp_path / "state.db")
+    branch = "storyapp/delegate"
+    session_name = "agent-storyapp-delegate"
+    _append_agent(store, branch, session_name, log_path)
+
+    bus = LocalBus(tmp_path / "bus")
+    notifier = Notifier(channel="local_bus", bus=bus)
+
+    prompt_path = tmp_path / "command.md"
+    prompt_path.write_text("JSON ONLY\n{log_excerpt}\n", encoding="utf-8")
+    delegate_path = tmp_path / "delegate.md"
+    delegate_path.write_text("delegated {log_excerpt}", encoding="utf-8")
+
+    config = OrchestratorConfig(
+        poll_interval=0.1,
+        cooldown_seconds=1.0,
+        session_cooldown_seconds=1.0,
+        max_commands_per_cycle=1,
+        history_lines=5,
+        prompts=PromptConfig(command=prompt_path, summary=None, delegate=delegate_path),
+        codex=CodexConfig(bin="codex", extra_args=[], timeout=5.0, env={}),
+        command_timeout_seconds=45.0,
+        delegate_to_codex=True,
+    )
+
+    decision = OrchestratorDecision(
+        summary="handled internally",
+        notify="",
+        requires_confirmation=False,
+        phase="executing",
+        blockers=(),
+        commands=(CommandSuggestion(text="echo should not run"),),
+    )
+
+    service = OrchestratorService(
+        agent_service=AgentService(state_store=store),
+        state_store=store,
+        bus=bus,
+        notifier=notifier,
+        codex=FakeCodexClient([decision]),
+        config=config,
+    )
+
+    try:
+        service.run_once()
+        commands = _read_jsonl(bus.commands_path)
+        assert commands == []
+        session = store.get_agent_session(branch)
+        assert session is not None
+        metadata = session["metadata"]
+        assert metadata.get("orchestrator_summary") == "handled internally"
+        assert metadata.get("delegate_suggestions") == ["echo should not run"]
     finally:
         service.agent_service.close()
         store.close()

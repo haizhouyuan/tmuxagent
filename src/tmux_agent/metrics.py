@@ -39,6 +39,16 @@ ORCHESTRATOR_DECISION_ERRORS_TOTAL = Counter(
     "Number of orchestrator decision failures",
     labelnames=("branch",),
 )
+ORCHESTRATOR_JSON_PARSE_FAILURES = Counter(
+    "orchestrator_json_parse_failures_total",
+    "Codex JSON parse failures grouped by branch and error kind",
+    labelnames=("branch", "kind"),
+)
+ORCHESTRATOR_UTF8_DECODE_ERRORS = Counter(
+    "orchestrator_utf8_decode_errors_total",
+    "UTF-8 decode/encoding issues encountered while running Codex",
+    labelnames=("branch",),
+)
 ORCHESTRATOR_QUEUE_SIZE = Gauge(
     "orchestrator_queue_size",
     "Current queued command count per branch",
@@ -76,6 +86,18 @@ def record_error(branch: str) -> None:
     """Track orchestrator decision errors for alerting."""
 
     ORCHESTRATOR_DECISION_ERRORS_TOTAL.labels(branch=branch).inc()
+
+
+def record_json_parse_failure(branch: str, kind: str) -> None:
+    """Track Codex JSON解析失败，方便排查错误类型。"""
+
+    ORCHESTRATOR_JSON_PARSE_FAILURES.labels(branch=branch, kind=kind).inc()
+
+
+def record_utf8_decode_error(branch: str) -> None:
+    """针对 UTF-8 解码失败记录指标。"""
+
+    ORCHESTRATOR_UTF8_DECODE_ERRORS.labels(branch=branch).inc()
 
 
 def set_queue_size(branch: str, size: int) -> None:

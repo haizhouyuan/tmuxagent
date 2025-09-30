@@ -31,6 +31,8 @@ class PromptConfig(BaseModel):
 
     command: Path = Path(".tmuxagent/prompts/command.md")
     summary: Path | None = Path(".tmuxagent/prompts/summary.md")
+    delegate: Path | None = None
+    stuck_detection: Path | None = Path(".tmuxagent/prompts/stuck_detection.md")
 
     def expand(self, base: Path) -> "PromptConfig":
         data = self.model_dump()
@@ -77,6 +79,8 @@ class OrchestratorConfig(BaseModel):
     stall_timeout_seconds: float = 300.0
     stall_retries_before_notify: int = 2
     failure_alert_threshold: int = 3
+    command_timeout_seconds: float = 45.0
+    delegate_to_codex: bool = False
 
     def expand_paths(self, base: Path) -> "OrchestratorConfig":
         clone = self.model_copy(deep=True)

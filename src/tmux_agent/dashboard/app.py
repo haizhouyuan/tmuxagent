@@ -1,7 +1,9 @@
 """FastAPI application exposing a lightweight dashboard."""
 from __future__ import annotations
 
+import json
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
@@ -55,6 +58,14 @@ class PaneSummaryResponse(BaseModel):
     raw: Optional[dict[str, Any]] = None
 
 
+class DelegateRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    session: Optional[str] = None
+    branch: Optional[str] = None
+    prepend_comment: bool = True
+    enter: bool = True
+
+
 def create_app(config: DashboardConfig) -> FastAPI:
     app = FastAPI(title="tmux-agent dashboard", version="0.1.0")
 
@@ -69,11 +80,38 @@ def create_app(config: DashboardConfig) -> FastAPI:
     except PaneSummaryError:
         pane_summarizer = None
 
+    status_dir = Path.home().expanduser() / ".tmux_agent" / "status"
+    digest_path = status_dir / "storyapp-digest.json"
+    alerts_path = Path.home().expanduser() / ".tmux_agent" / "alerts.log"
+    cache_ttl_seconds = 10.0
+    digest_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+    alerts_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+
     def get_provider() -> DashboardDataProvider:
         return DashboardDataProvider(config.db_path)
 
     def get_pane_service() -> PaneService:
         return pane_service
+
+    def _resolve_session_from_branch(branch: str) -> Optional[str]:
+        store = StateStore(config.db_path)
+        try:
+            session_row = store.get_agent_session(branch)
+            if session_row:
+                return session_row.get("session_name")
+        finally:
+            store.close()
+        return None
+
+    def _resolve_branch_from_session(session_name: str) -> Optional[str]:
+        store = StateStore(config.db_path)
+        try:
+            session_row = store.find_agent_by_session(session_name)
+            if session_row:
+                return session_row.get("branch")
+        finally:
+            store.close()
+        return None
 
     def serialize_stage(row) -> dict[str, Any]:
         display_time = row.updated_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -118,6 +156,55 @@ def create_app(config: DashboardConfig) -> FastAPI:
                 lookup[session_name] = item
         pane_analyzer.update_agent_sessions(lookup)
         return payload, lookup
+
+    def _load_storyapp_digest(force: bool = False) -> dict[str, Any]:
+        now = time.time()
+        if not force and digest_cache["data"] is not None and now - digest_cache["ts"] < cache_ttl_seconds:
+            return digest_cache["data"]  # type: ignore[return-value]
+        try:
+            raw = digest_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            digest: dict[str, Any] = {"generated_at": None, "agents": {}}
+        else:
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                digest = {"generated_at": None, "agents": {}, "error": "invalid digest json"}
+            else:
+                if isinstance(loaded, dict):
+                    digest = loaded
+                else:
+                    digest = {"generated_at": None, "agents": {}, "value": loaded}
+        digest_cache["ts"] = now
+        digest_cache["data"] = digest
+        return digest
+
+    def _load_storyapp_alerts(limit: int = 50, force: bool = False) -> list[dict[str, Any]]:
+        limit = max(limit, 0)
+        now = time.time()
+        cached_items = alerts_cache.get("data") if isinstance(alerts_cache.get("data"), list) else None
+        if not force and cached_items is not None and now - alerts_cache["ts"] < cache_ttl_seconds:
+            return cached_items if not limit else cached_items[-limit:]
+        try:
+            lines = alerts_path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            parsed: list[dict[str, Any]] = []
+        else:
+            parsed = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                if line.startswith("[") and "]" in line:
+                    timestamp, message = line.split("]", 1)
+                    ts_str = timestamp.lstrip("[").strip()
+                    body = message.strip()
+                else:
+                    ts_str = None
+                    body = line.strip()
+                parsed.append({"timestamp": ts_str, "message": body})
+        alerts_cache["ts"] = now
+        alerts_cache["data"] = parsed
+        return parsed if not limit else parsed[-limit:]
 
     def write_decision(host: str, pane_id: str, stage: str, decision: str) -> None:
         store = StateStore(config.db_path)
@@ -333,6 +420,33 @@ def create_app(config: DashboardConfig) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
         return {"status": "ok"}
+
+    @app.get("/api/storyapp/digest")
+    def api_storyapp_digest(branch: Optional[str] = None, force: bool = False) -> JSONResponse:
+        digest = _load_storyapp_digest(force=force)
+        response_digest = digest
+        if branch:
+            agents = digest.get("agents", {}) if isinstance(digest, dict) else {}
+            agent_payload = agents.get(branch)
+            filtered = dict(digest) if isinstance(digest, dict) else {"generated_at": None, "agents": {}}
+            filtered["agents"] = {branch: agent_payload} if agent_payload else {}
+            response_digest = filtered
+        return JSONResponse(
+            {
+                "digest": response_digest,
+                "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    @app.get("/api/storyapp/alerts")
+    def api_storyapp_alerts(limit: int = 50, force: bool = False) -> JSONResponse:
+        items = _load_storyapp_alerts(limit=limit, force=force)
+        return JSONResponse(
+            {
+                "items": items,
+                "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     @app.get("/api/dashboard")
     def dashboard_state(

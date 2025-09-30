@@ -116,6 +116,198 @@
         gap: 1rem;
         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       }
+      .storyapp-section {
+        margin-top: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+      }
+      .storyapp-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+      }
+      .storyapp-header-group {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+        color: #475569;
+      }
+      .storyapp-header-actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+      .storyapp-header time {
+        font-size: 0.78rem;
+        color: #64748b;
+      }
+      .storyapp-alert-banner {
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+        background: rgba(248, 113, 113, 0.18);
+        color: #b91c1c;
+        font-size: 0.85rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+      .storyapp-alert-banner strong {
+        font-weight: 600;
+      }
+      .storyapp-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1rem;
+      }
+      .storyapp-card {
+        border-radius: 0.85rem;
+        border: 1px solid rgba(99, 102, 241, 0.22);
+        background: linear-gradient(150deg, rgba(224, 231, 255, 0.45) 0%, rgba(237, 233, 254, 0.95) 100%);
+        padding: 1rem 1.1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        position: relative;
+      }
+      .storyapp-card.attention {
+        border-color: rgba(239, 68, 68, 0.65);
+        box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.25);
+      }
+      .storyapp-card h4 {
+        margin: 0;
+        font-size: 1.05rem;
+        color: #1e293b;
+      }
+      .storyapp-card .storyapp-status {
+        font-size: 0.75rem;
+        color: #475569;
+      }
+      .storyapp-phase {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        background: rgba(29, 78, 216, 0.16);
+        color: #1d4ed8;
+        font-weight: 600;
+        font-size: 0.72rem;
+      }
+      .storyapp-progress {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+      .storyapp-progress span {
+        font-size: 0.7rem;
+        padding: 0.18rem 0.45rem;
+        border-radius: 0.45rem;
+        background: rgba(148, 163, 184, 0.3);
+        color: #1f2937;
+      }
+      .storyapp-progress span[data-status="done"] {
+        background: rgba(34, 197, 94, 0.22);
+        color: #166534;
+      }
+      .storyapp-progress span[data-status="active"] {
+        background: rgba(59, 130, 246, 0.22);
+        color: #1d4ed8;
+      }
+      .storyapp-summary {
+        font-size: 0.78rem;
+        color: #1f2937;
+        background: rgba(59, 130, 246, 0.09);
+        border-radius: 0.55rem;
+        padding: 0.55rem 0.7rem;
+        white-space: pre-wrap;
+      }
+      .storyapp-log {
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+        font-size: 0.72rem;
+        background: rgba(15, 23, 42, 0.85);
+        color: #f8fafc;
+        padding: 0.6rem 0.7rem;
+        border-radius: 0.6rem;
+        max-height: 8rem;
+        overflow: auto;
+      }
+      .storyapp-command {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        border: 1px dashed rgba(148, 163, 184, 0.5);
+        border-radius: 0.75rem;
+        padding: 0.85rem 1rem;
+        background: rgba(226, 232, 240, 0.35);
+      }
+      .storyapp-command label {
+        font-size: 0.78rem;
+        color: #475569;
+        display: block;
+        margin-bottom: 0.25rem;
+      }
+      .storyapp-command select,
+      .storyapp-command textarea {
+        width: 100%;
+        border-radius: 0.5rem;
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        padding: 0.5rem 0.65rem;
+        font-size: 0.9rem;
+        font-family: inherit;
+        resize: vertical;
+        min-height: 2.5rem;
+      }
+      .storyapp-command textarea {
+        min-height: 3.2rem;
+      }
+      .storyapp-command-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        font-size: 0.78rem;
+        color: #475569;
+      }
+      .storyapp-command-controls input[type="checkbox"] {
+        margin-right: 0.3rem;
+      }
+      .storyapp-command-actions {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+      }
+      .storyapp-command-status {
+        font-size: 0.75rem;
+        color: #64748b;
+      }
+      .storyapp-command-status.error {
+        color: #b91c1c;
+        font-weight: 600;
+      }
+      .storyapp-alerts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        font-size: 0.75rem;
+        color: #b91c1c;
+      }
+      .storyapp-alerts-list time {
+        font-size: 0.7rem;
+        color: #7f1d1d;
+        margin-right: 0.4rem;
+      }
+      .storyapp-alert-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .storyapp-alert-actions button {
+        font-size: 0.78rem;
+        padding: 0.35rem 0.8rem;
+      }
       .orchestrator-card {
         border-radius: 0.9rem;
         border: 1px solid #dbe2f1;
@@ -902,6 +1094,53 @@
                 <div class="empty-state">暂无 orchestrator 会话。</div>
               {% endif %}
             </div>
+            <div class="storyapp-section" id="storyapp-section">
+              <div class="storyapp-header">
+                <div class="storyapp-header-group">
+                  <h3 class="orchestrator-title">Storyapp 总控</h3>
+                  <time id="storyapp-updated" datetime="">--</time>
+                </div>
+                <div class="storyapp-header-actions">
+                  <button type="button" class="button-secondary" id="storyapp-refresh">刷新 Storyapp</button>
+                </div>
+              </div>
+              <div id="storyapp-alert-banner" class="storyapp-alert-banner hidden">
+                <strong>需要关注</strong>
+                <div class="storyapp-alerts-list" id="storyapp-alerts"></div>
+                <div class="storyapp-alert-actions" id="storyapp-alert-actions">
+                  <button type="button" id="storyapp-alert-ack">标记已处理</button>
+                  <button type="button" class="button-secondary" id="storyapp-alert-ignore">忽略一次</button>
+                  <span id="storyapp-alert-status" class="storyapp-command-status"></span>
+                </div>
+              </div>
+              <div class="storyapp-command" id="storyapp-command">
+                <div>
+                  <label for="storyapp-branch-select">选择工作流</label>
+                  <select id="storyapp-branch-select">
+                    <option value="">(等待数据...)</option>
+                  </select>
+                </div>
+                <div>
+                  <label>对应 session</label>
+                  <div id="storyapp-session-label" class="storyapp-command-status">--</div>
+                </div>
+                <div>
+                  <label for="storyapp-command-input">发送命令</label>
+                  <textarea id="storyapp-command-input" placeholder="例如：git status -sb"></textarea>
+                </div>
+                <div class="storyapp-command-controls">
+                  <label><input type="checkbox" id="storyapp-command-enter" checked /> 附带回车</label>
+                  <span id="storyapp-command-status" class="storyapp-command-status"></span>
+                </div>
+                <div class="storyapp-command-actions">
+                  <button type="button" id="storyapp-command-send">发送</button>
+                  <button type="button" class="button-secondary" id="storyapp-command-clear">清空</button>
+                </div>
+              </div>
+              <div class="storyapp-cards" id="storyapp-digest-cards">
+                <div class="empty-state">Storyapp digest 加载中...</div>
+              </div>
+            </div>
           </div>
         </section>
         <section aria-labelledby="pane-section-title">
@@ -1053,6 +1292,22 @@
       const orchestratorGrid = document.getElementById('orchestrator-grid');
       const paneFilterInput = document.getElementById('pane-filter');
       const paneTemplate = document.getElementById('pane-template');
+      const storyappRefreshButton = document.getElementById('storyapp-refresh');
+      const storyappUpdatedDisplay = document.getElementById('storyapp-updated');
+      const storyappCardsContainer = document.getElementById('storyapp-digest-cards');
+      const storyappAlertBanner = document.getElementById('storyapp-alert-banner');
+      const storyappAlertsList = document.getElementById('storyapp-alerts');
+      const storyappBranchSelect = document.getElementById('storyapp-branch-select');
+      const storyappSessionLabel = document.getElementById('storyapp-session-label');
+      const storyappCommandInput = document.getElementById('storyapp-command-input');
+      const storyappCommandEnterToggle = document.getElementById('storyapp-command-enter');
+      const storyappCommandSend = document.getElementById('storyapp-command-send');
+      const storyappCommandClear = document.getElementById('storyapp-command-clear');
+      const storyappCommandStatus = document.getElementById('storyapp-command-status');
+      const storyappAlertActions = document.getElementById('storyapp-alert-actions');
+      const storyappAlertAckButton = document.getElementById('storyapp-alert-ack');
+      const storyappAlertIgnoreButton = document.getElementById('storyapp-alert-ignore');
+      const storyappAlertStatus = document.getElementById('storyapp-alert-status');
 
       const pinnedStorageKey = 'tmux-dashboard-pinned';
       const layoutStorageKey = 'tmux-dashboard-layout';
@@ -1070,12 +1325,41 @@
       const refreshIntervalMs = 3000;
       let refreshTimer = null;
       let autoRefreshEnabled = true;
+      const storyappRefreshIntervalMs = 15000;
+      let storyappRefreshTimer = null;
+      const storyappState = {
+        digest: null,
+        alerts: [],
+        selectedBranch: '',
+      };
+
+      function escapeHtml(text) {
+        return (text ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
 
       function scheduleRefresh() {
         clearInterval(refreshTimer);
         if (autoRefreshEnabled) {
           refreshTimer = setInterval(fetchDashboardState, refreshIntervalMs);
         }
+        scheduleStoryappRefresh();
+      }
+
+      function scheduleStoryappRefresh() {
+        clearInterval(storyappRefreshTimer);
+        if (!autoRefreshEnabled) {
+          return;
+        }
+        storyappRefreshTimer = setInterval(() => {
+          fetchStoryappData().catch((err) => {
+            console.error('刷新 Storyapp digest 失败:', err);
+          });
+        }, storyappRefreshIntervalMs);
       }
 
       function applyLayoutMode() {
@@ -1100,6 +1384,304 @@
         layoutMode = sequence[(idx + 1) % sequence.length];
         localStorage.setItem(layoutStorageKey, layoutMode);
         applyLayoutMode();
+      }
+
+      function formatDateTime(value) {
+        if (!value) {
+          return '--';
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          return value;
+        }
+        return date.toLocaleString();
+      }
+
+      function getStoryappAgents() {
+        const digest = storyappState.digest;
+        if (!digest || typeof digest !== 'object') {
+          return {};
+        }
+        const agents = digest.agents;
+        return agents && typeof agents === 'object' ? agents : {};
+      }
+
+      function getStoryappSelectedAgent() {
+        const agents = getStoryappAgents();
+        if (storyappState.selectedBranch && agents[storyappState.selectedBranch]) {
+          return agents[storyappState.selectedBranch];
+        }
+        const branches = Object.keys(agents);
+        if (branches.length) {
+          return agents[branches[0]];
+        }
+        return null;
+      }
+
+      function renderStoryappSection() {
+        if (!storyappCardsContainer) {
+          return;
+        }
+        const digest = storyappState.digest || {};
+        const agents = getStoryappAgents();
+        const branches = Object.keys(agents);
+        if (!storyappState.selectedBranch || !agents[storyappState.selectedBranch]) {
+          storyappState.selectedBranch = branches[0] || '';
+        }
+
+        if (storyappBranchSelect) {
+          storyappBranchSelect.innerHTML = '';
+          if (!branches.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '暂无工作流';
+            storyappBranchSelect.appendChild(option);
+          } else {
+            for (const branch of branches) {
+              const option = document.createElement('option');
+              option.value = branch;
+              option.textContent = branch;
+              storyappBranchSelect.appendChild(option);
+            }
+          }
+          storyappBranchSelect.value = storyappState.selectedBranch;
+        }
+
+        if (storyappUpdatedDisplay) {
+          const updatedTs = (digest && digest.generated_at) || digest.refreshed_at || '';
+          storyappUpdatedDisplay.dateTime = updatedTs || '';
+          storyappUpdatedDisplay.textContent = formatDateTime(updatedTs);
+          storyappUpdatedDisplay.title = updatedTs || '';
+        }
+
+        const selectedAgent = storyappState.selectedBranch ? agents[storyappState.selectedBranch] : null;
+        if (storyappSessionLabel) {
+          storyappSessionLabel.textContent = selectedAgent && selectedAgent.session ? selectedAgent.session : '--';
+        }
+
+        storyappCardsContainer.innerHTML = '';
+        if (!branches.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty-state';
+          empty.textContent = '暂未检测到 Storyapp 工作流。';
+          storyappCardsContainer.appendChild(empty);
+        } else {
+          for (const branch of branches) {
+            const agent = agents[branch] || {};
+            const card = document.createElement('article');
+            card.className = 'storyapp-card';
+            if (agent.attention) {
+              card.classList.add('attention');
+            }
+            const progressBadges = Array.isArray(agent.phase_progress)
+              ? agent.phase_progress
+                  .map((stage) => {
+                    const status = escapeHtml(stage.status || 'pending');
+                    const name = escapeHtml(stage.name || stage.stage || '未命名');
+                    return `<span data-status="${status}">${name}</span>`;
+                  })
+                  .join('')
+              : '';
+            const blockers = Array.isArray(agent.blockers)
+              ? agent.blockers.map((item) => `<div>• ${escapeHtml(item)}</div>`).join('')
+              : '';
+            const logLines = Array.isArray(agent.log_tail) ? agent.log_tail.slice(-10) : [];
+            const logHtml = logLines.length ? escapeHtml(logLines.join('\n')) : '';
+            card.innerHTML = `
+              <h4>${escapeHtml(branch)}</h4>
+              <div class="storyapp-status">状态：${escapeHtml(agent.status || 'unknown')}</div>
+              ${agent.phase ? `<div class="storyapp-phase">${escapeHtml(agent.phase)}</div>` : ''}
+              ${progressBadges ? `<div class="storyapp-progress">${progressBadges}</div>` : ''}
+              ${agent.summary ? `<div class="storyapp-summary">${escapeHtml(agent.summary)}</div>` : ''}
+              ${blockers ? `<div><strong>阻塞:</strong><div class="orchestrator-list">${blockers}</div></div>` : ''}
+              ${logHtml ? `<div class="storyapp-log">${logHtml}</div>` : ''}
+            `;
+            storyappCardsContainer.appendChild(card);
+          }
+        }
+
+        if (storyappAlertsList && storyappAlertBanner) {
+          const alerts = Array.isArray(storyappState.alerts) ? storyappState.alerts : [];
+          const attentionBranches = branches.filter((branch) => {
+            const agent = agents[branch];
+            return agent && agent.attention;
+          });
+          const hasAlerts = alerts.length > 0 || attentionBranches.length > 0;
+          if (hasAlerts) {
+            storyappAlertBanner.classList.remove('hidden');
+            const alertItems = [];
+            if (alerts.length) {
+              for (const alert of alerts.slice(-10)) {
+                const timestamp = alert.timestamp ? escapeHtml(alert.timestamp) : '';
+                const message = escapeHtml(alert.message || '');
+                alertItems.push(`<div><time>${timestamp}</time>${message}</div>`);
+              }
+            }
+            if (attentionBranches.length) {
+              alertItems.push(`<div><strong>关注分支:</strong> ${escapeHtml(attentionBranches.join(', '))}</div>`);
+            }
+            storyappAlertsList.innerHTML = alertItems.join('') || '<div>已记录关注项，等待后续更新。</div>';
+          } else {
+            storyappAlertBanner.classList.add('hidden');
+            storyappAlertsList.innerHTML = '';
+          }
+          const selectedAgent = storyappState.selectedBranch ? agents[storyappState.selectedBranch] : null;
+          const showActions = hasAlerts && selectedAgent && selectedAgent.attention;
+          if (storyappAlertActions) {
+            storyappAlertActions.classList.toggle('hidden', !showActions);
+          }
+          if (storyappAlertStatus && (!showActions || !hasAlerts)) {
+            storyappAlertStatus.textContent = '';
+            storyappAlertStatus.classList.remove('error');
+          }
+          if (storyappAlertAckButton) {
+            storyappAlertAckButton.disabled = !showActions;
+          }
+          if (storyappAlertIgnoreButton) {
+            storyappAlertIgnoreButton.disabled = !showActions;
+          }
+        }
+      }
+
+      async function fetchStoryappData(options = {}) {
+        const force = Boolean(options.force);
+        try {
+          const digestParams = new URLSearchParams();
+          if (force) {
+            digestParams.set('force', 'true');
+          }
+          const digestUrl = digestParams.toString() ? `/api/storyapp/digest?${digestParams}` : '/api/storyapp/digest';
+          const digestResp = await fetch(digestUrl);
+          if (!digestResp.ok) {
+            throw new Error(`HTTP ${digestResp.status}`);
+          }
+          const digestPayload = await digestResp.json();
+          storyappState.digest = digestPayload.digest || null;
+          renderStoryappSection();
+        } catch (err) {
+          console.error('拉取 Storyapp digest 失败:', err);
+        }
+        try {
+          const alertParams = new URLSearchParams({ limit: '10' });
+          if (force) {
+            alertParams.set('force', 'true');
+          }
+          const alertsResp = await fetch(`/api/storyapp/alerts?${alertParams}`);
+          if (!alertsResp.ok) {
+            throw new Error(`HTTP ${alertsResp.status}`);
+          }
+          const alertsPayload = await alertsResp.json();
+          storyappState.alerts = alertsPayload.items || [];
+          renderStoryappSection();
+        } catch (err) {
+          console.error('拉取 Storyapp alerts 失败:', err);
+        }
+      }
+
+      async function sendStoryappDashboardCommand() {
+        const branch = storyappBranchSelect ? storyappBranchSelect.value.trim() : '';
+        const agents = getStoryappAgents();
+        const targetAgent = branch ? agents[branch] : getStoryappSelectedAgent();
+        const text = storyappCommandInput ? storyappCommandInput.value.trim() : '';
+        const enter = storyappCommandEnterToggle ? storyappCommandEnterToggle.checked : true;
+        storyappCommandStatus.classList.remove('error');
+        if (!text) {
+          storyappCommandStatus.textContent = '请输入命令';
+          storyappCommandStatus.classList.add('error');
+          return;
+        }
+        const payload = {
+          text,
+          enter,
+          sender: 'dashboard',
+        };
+        if (branch) {
+          payload.branch = branch;
+        }
+        if (targetAgent && targetAgent.session) {
+          payload.session = targetAgent.session;
+        }
+        storyappCommandStatus.textContent = '发送中...';
+        try {
+          const resp = await fetch('/api/commands', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!resp.ok) {
+            const message = await resp.text();
+            throw new Error(message || `HTTP ${resp.status}`);
+          }
+          storyappCommandStatus.textContent = '已发送';
+          if (storyappCommandInput) {
+            storyappCommandInput.value = '';
+          }
+          setTimeout(() => {
+            storyappCommandStatus.textContent = '';
+          }, 2000);
+          fetchStoryappData({ force: true });
+        } catch (err) {
+          console.error('发送 Storyapp 命令失败:', err);
+          storyappCommandStatus.textContent = `发送失败: ${err.message}`;
+          storyappCommandStatus.classList.add('error');
+        }
+      }
+
+      async function sendStoryappConfirmation(action) {
+        const branch = storyappBranchSelect ? storyappBranchSelect.value.trim() : '';
+        if (!branch) {
+          if (storyappAlertStatus) {
+            storyappAlertStatus.textContent = '请选择工作流';
+            storyappAlertStatus.classList.add('error');
+          }
+          return;
+        }
+        const agent = getStoryappAgents()[branch] || getStoryappSelectedAgent();
+        const lastCommands = agent && Array.isArray(agent.last_commands) ? agent.last_commands : [];
+        const latestCommand = lastCommands.length ? String(lastCommands[lastCommands.length - 1]) : null;
+        const payload = {
+          branch,
+          action,
+          command: latestCommand,
+          meta: {
+            source: 'dashboard',
+            attention: agent ? !!agent.attention : false,
+          },
+        };
+        if (storyappAlertStatus) {
+          storyappAlertStatus.textContent = '提交中...';
+          storyappAlertStatus.classList.remove('error');
+        }
+        if (storyappAlertAckButton) storyappAlertAckButton.disabled = true;
+        if (storyappAlertIgnoreButton) storyappAlertIgnoreButton.disabled = true;
+        try {
+          const resp = await fetch('/api/confirmations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!resp.ok) {
+            const message = await resp.text();
+            throw new Error(message || `HTTP ${resp.status}`);
+          }
+          if (storyappAlertStatus) {
+            storyappAlertStatus.textContent = '已提交';
+            storyappAlertStatus.classList.remove('error');
+          }
+          fetchStoryappData({ force: true });
+          setTimeout(() => {
+            if (storyappAlertStatus) storyappAlertStatus.textContent = '';
+          }, 2000);
+        } catch (err) {
+          console.error('提交 Storyapp 确认失败:', err);
+          if (storyappAlertStatus) {
+            storyappAlertStatus.textContent = `提交失败: ${err.message}`;
+            storyappAlertStatus.classList.add('error');
+          }
+        } finally {
+          if (storyappAlertAckButton) storyappAlertAckButton.disabled = false;
+          if (storyappAlertIgnoreButton) storyappAlertIgnoreButton.disabled = false;
+        }
       }
 
       let focusedPaneId = null;
@@ -1692,8 +2274,57 @@
         }
       }
 
+      if (storyappRefreshButton) {
+        storyappRefreshButton.addEventListener('click', () => {
+          fetchStoryappData({ force: true });
+        });
+      }
+
+      if (storyappBranchSelect) {
+        storyappBranchSelect.addEventListener('change', () => {
+          storyappState.selectedBranch = storyappBranchSelect.value || '';
+          renderStoryappSection();
+        });
+      }
+
+      if (storyappCommandSend) {
+        storyappCommandSend.addEventListener('click', () => {
+          sendStoryappDashboardCommand();
+        });
+      }
+
+      if (storyappCommandClear) {
+        storyappCommandClear.addEventListener('click', () => {
+          if (storyappCommandInput) {
+            storyappCommandInput.value = '';
+          }
+          storyappCommandStatus.textContent = '';
+          storyappCommandStatus.classList.remove('error');
+        });
+      }
+      if (storyappAlertAckButton) {
+        storyappAlertAckButton.addEventListener('click', () => {
+          sendStoryappConfirmation('approve');
+        });
+      }
+      if (storyappAlertIgnoreButton) {
+        storyappAlertIgnoreButton.addEventListener('click', () => {
+          sendStoryappConfirmation('reject');
+        });
+      }
+
+      if (storyappCommandInput) {
+        storyappCommandInput.addEventListener('keydown', (event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+            event.preventDefault();
+            sendStoryappDashboardCommand();
+          }
+        });
+      }
+
       refreshButton.addEventListener('click', () => {
         fetchDashboardState();
+        fetchStoryappData({ force: true });
       });
 
       toggleRefreshButton.addEventListener('click', () => {
@@ -1731,6 +2362,7 @@
       window.addEventListener('focus', () => {
         if (autoRefreshEnabled) {
           fetchDashboardState();
+          fetchStoryappData();
         }
       });
 
@@ -1751,6 +2383,10 @@
         renderOrchestratorBoard(orchestratorStore || []);
         paneActivityStore = new Map(Object.entries(bootstrapData.pane_activity || {}));
         syncPaneGrid(bootstrapData.panes || []);
+        renderStoryappSection();
+        fetchStoryappData().catch((err) => {
+          console.error('初始化 Storyapp digest 失败:', err);
+        });
         scheduleRefresh();
       }
 
