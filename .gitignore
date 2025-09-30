@@ -12,3 +12,4 @@ policy.yaml
 
 # Ignore local secrets directory
 secrets/
+llama.cpp/

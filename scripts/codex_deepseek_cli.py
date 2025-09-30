@@ -13,6 +13,11 @@ import urllib.request
 
 API_URL = "https://api.deepseek.com/v1/chat/completions"
 
+SYSTEM_PROMPT = (
+    "You are a tool that must answer strictly in JSON. "
+    "Do not add any explanations, code fences, or extra text outside the JSON."
+)
+
 
 def read_prompt() -> str:
     payload = sys.stdin.read()
@@ -25,6 +30,7 @@ def call_deepseek(api_key: str, model: str, prompt: str, timeout: float) -> str:
     request_body = {
         "model": model,
         "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "stream": False,
@@ -54,19 +60,50 @@ def call_deepseek(api_key: str, model: str, prompt: str, timeout: float) -> str:
     except json.JSONDecodeError as exc:  # pragma: no cover
         raise RuntimeError(f"DeepSeek returned non-JSON payload: {body}") from exc
 
+    response_text: str | None = None
     choices = payload.get("choices")
     if isinstance(choices, list) and choices:
         first = choices[0]
         if isinstance(first, dict):
             message = first.get("message")
-            if isinstance(message, dict) and "content" in message:
-                return str(message["content"])
-            delta = first.get("delta")
-            if isinstance(delta, dict) and "content" in delta:
-                return str(delta["content"])
-    if "output_text" in payload:
-        return str(payload["output_text"])
-    raise RuntimeError(f"Unexpected DeepSeek response format: {payload}")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    response_text = content
+            if response_text is None:
+                delta = first.get("delta")
+                if isinstance(delta, dict):
+                    content = delta.get("content")
+                    if isinstance(content, str):
+                        response_text = content
+    if response_text is None and "output_text" in payload:
+        candidate = payload["output_text"]
+        if isinstance(candidate, str):
+            response_text = candidate
+    if response_text is None:
+        raise RuntimeError(f"Unexpected DeepSeek response format: {payload}")
+
+    text = response_text.strip()
+    if not text:
+        raise RuntimeError("DeepSeek returned empty response")
+
+    # Ensure plain JSON without code fences or commentary
+    if text.startswith("```") and text.endswith("```"):
+        text = text.strip("`")
+    if "```" in text:
+        start = text.find("```json")
+        if start != -1:
+            start = text.find("\n", start)
+            end = text.find("```", start + 1)
+            if start != -1 and end != -1:
+                text = text[start + 1 : end].strip()
+
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"DeepSeek response is not valid JSON: {text}") from exc
+
+    return text
 
 
 def build_parser() -> argparse.ArgumentParser:
