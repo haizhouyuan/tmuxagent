@@ -1,0 +1,40 @@
+principles:
+  - "Automate routine steps; pause for critical approvals."
+
+pipelines:
+  - name: "demo-pipeline"
+    match:
+      any_of:
+        - window_name: "^agent:codex-ci$"
+    stages:
+      - name: "lint"
+        triggers:
+          any_of:
+            - log_regex: "(?i)start lint"
+        actions_on_start:
+          - send_keys: "npm run lint"
+        success_when:
+          any_of:
+            - log_regex: "(?i)0 problems"
+            - message_type: "STATUS"
+        fail_when:
+          any_of:
+            - log_regex: "(?i)error"
+        on_fail:
+          - retry:
+              max: 1
+      - name: "build"
+        triggers:
+          any_of:
+            - after_stage_success: "lint"
+        require_approval: true
+        actions_on_start:
+          - send_keys: "npm run build"
+        success_when:
+          any_of:
+            - log_regex: "(?i)Build complete"
+        fail_when:
+          any_of:
+            - log_regex: "(?i)failed"
+        on_fail:
+          - ask_human: "Build failed, decide next step"

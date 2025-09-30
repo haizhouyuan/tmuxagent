@@ -1,0 +1,22 @@
+principles:
+  - "Test WeChat Work notifications with minimal triggers"
+
+pipelines:
+  - name: "wecom-test-pipeline"
+    match:
+      any_of:
+        - window_name: "^test-wecom.*"
+        - pane_title: "^wecom-test"
+    stages:
+      - name: "notify-test"
+        triggers:
+          any_of:
+            - log_regex: "test-wecom-notification"
+        actions_on_start:
+          - send_keys: "echo 'WeChat Work notification test triggered'"
+        success_when:
+          any_of:
+            - log_regex: "notification test triggered"
+        fail_when:
+          any_of:
+            - log_regex: "(?i)failed"

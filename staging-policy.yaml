@@ -1,0 +1,39 @@
+pipelines:
+- match:
+    any_of:
+    - window_name: ^test-wecom.*
+    - pane_title: ^wecom-test
+  name: wecom-test-pipeline
+  stages:
+  - actions_on_start:
+    - send_keys: echo 'WeChat Work notification test triggered'
+    fail_when:
+      any_of:
+      - log_regex: (?i)failed
+    name: notify-test
+    on_fail_notify:
+      body: '阶段 **notify-test** 执行失败
+
+
+        管道: wecom-test-pipeline
+
+        错误: {error_message}
+
+        时间: {timestamp}'
+      title: ❌ notify-test 失败
+    on_success_notify:
+      body: '阶段 **notify-test** 已成功完成
+
+
+        管道: wecom-test-pipeline
+
+        时间: {timestamp}'
+      title: ✅ notify-test 完成
+    success_when:
+      any_of:
+      - log_regex: notification test triggered
+    triggers:
+      any_of:
+      - log_regex: test-wecom-notification
+principles:
+- Test WeChat Work notifications with minimal triggers

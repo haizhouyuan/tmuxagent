@@ -1,0 +1,22 @@
+poll_interval_ms: 1500
+tmux_bin: tmux
+sqlite_path: ~/.tmux_agent/state.db
+approval_dir: ~/.tmux_agent/approvals
+notify: wecom,local_bus  # 企业微信群 + 本地门户
+# notify: wecom_app,local_bus  # 企业微信应用消息（需要IP白名单）
+hosts:
+  - name: local
+    tmux:
+      socket: default
+      session_filters:
+        - "^proj:storyapp"
+        - "^proj_storyapp"
+        - "^storyapp"
+        - "^agent-storyapp"
+      pane_name_patterns:
+        - "^codex"
+        - "^claude"
+        - "^proj"
+        - "^storyapp"
+        - "^agent"
+      capture_lines: 2000
